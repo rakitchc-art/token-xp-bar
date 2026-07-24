@@ -1,0 +1,62 @@
+╔══════════════════════════════════════════════════════════╗
+║        BARRE DE TOKENS CLAUDE  —  jauge d'XP jeu video     ║
+╚══════════════════════════════════════════════════════════╝
+
+Une petite barre flottante qui montre ta consommation Claude
+(limite "Session 5h") en direct, en haut a droite de l'ecran,
+uniquement quand VS Code est ta fenetre active.
+
+
+────────────────────────────────────────────────────────────
+  INSTALLATION  (super simple)
+────────────────────────────────────────────────────────────
+
+  1. Double-clique sur :  Installer.bat
+
+  2. Si Windows affiche un avertissement bleu
+     ("Windows a protege votre ordinateur") :
+       -> clique sur "Informations complementaires"
+       -> puis "Executer quand meme".
+     (C'est normal : le fichier vient d'internet. Il est sain.)
+
+  3. C'est tout ! Ouvre VS Code pour voir la barre apparaitre
+     en haut a droite. Elle se relancera toute seule a chaque
+     demarrage de Windows.
+
+
+────────────────────────────────────────────────────────────
+  UTILISATION
+────────────────────────────────────────────────────────────
+
+  - La jauge se remplit du VERT (0%) au ROUGE (100%).
+  - Le pourcentage est affiche a droite.
+  - SURVOLE la barre avec la souris -> elle montre le temps
+    restant avant la remise a zero ("reset").
+  - GLISSE la barre pour la deplacer ou tu veux.
+  - CLIC DROIT dessus -> menu (Actualiser / Fermer).
+
+
+────────────────────────────────────────────────────────────
+  IMPORTANT / A SAVOIR
+────────────────────────────────────────────────────────────
+
+  - Il faut utiliser CLAUDE CODE dans VS Code : c'est lui qui
+    fournit le vrai chiffre officiel (le meme que le site
+    claude.ai et le panneau "Account & Usage" de VS Code).
+
+  - Le chiffre avance PAR PALIERS de quelques minutes : c'est
+    Claude Code qui met a jour sa donnee de temps en temps.
+    La barre, elle, se rafraichit dans la seconde des qu'une
+    nouvelle valeur est disponible. Si le % reste fige un
+    moment, c'est simplement qu'il n'y a pas de nouvelle conso.
+
+
+────────────────────────────────────────────────────────────
+  DESINSTALLATION
+────────────────────────────────────────────────────────────
+
+  Double-clique sur :  Desinstaller.bat
+  (retire le demarrage automatique)
+
+
+  Fait avec ❤ par un pote — bon code !

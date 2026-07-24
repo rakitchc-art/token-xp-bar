@@ -1,0 +1,8 @@
+# Config personnelle (position de la barre a l'ecran).
+# Elle est recreee automatiquement au premier lancement.
+config.json
+
+# Windows
+Thumbs.db
+Desktop.ini
+*.lnk
