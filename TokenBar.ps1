@@ -221,9 +221,9 @@ $timer.Add_Tick({
     $script:tick++
     try {
         $lw = (Get-Item $mainCfgPath -ErrorAction Stop).LastWriteTimeUtc
-        if ($lw -ne $script:lastWrite) { $script:lastWrite = $lw; Update-Bar; return }
+        if ($lw -ne $script:lastWrite) { $script:lastWrite = $lw; Update-Bar; return }  # re-calage instantane sur l'officiel
     } catch { }
-    if ($script:tick % 30 -eq 0) { Update-Bar }
+    if ($script:tick % 4 -eq 0) { Update-Bar }   # estimation "live" (conso locale) toutes les 4 s
 })
 $timer.Start()
 

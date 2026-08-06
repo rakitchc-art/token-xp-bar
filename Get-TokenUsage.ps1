@@ -1,21 +1,26 @@
 # ============================================================================
-#  Get-TokenUsage.ps1  -  Le "cerveau" de la barre
+#  Get-TokenUsage.ps1  -  Le "cerveau" de la barre (mode HYBRIDE)
 #  ---------------------------------------------------------------------------
-#  Source PRINCIPALE : le cache officiel de Claude Code, dans ~/.claude.json
-#  (champ "cachedUsageUtilization"). C'est EXACTEMENT ce qu'affiche le panneau
-#  "Account & Usage" de VS Code et le site claude.ai : ca inclut TOUT ton usage
-#  (Claude Code + web + telephone), car c'est la limite du compte.
+#  Source d'ancrage : le cache officiel de Claude Code (~/.claude.json,
+#  champ "cachedUsageUtilization.five_hour") = le vrai % du compte (Code + web
+#  + telephone), identique au site et au panneau VS Code.
 #
-#  Repli (si le cache est absent) : estimation locale a partir des .jsonl.
+#  Probleme : ce cache n'est rafraichi que de temps en temps par Claude Code.
+#  Solution HYBRIDE : entre deux rafraichissements officiels, on fait AVANCER
+#  la barre en direct grace aux tokens locaux (logs .jsonl, temps reel), puis
+#  on se RE-CALE sur l'exact des que le cache officiel bouge.
+#
+#  Calibrage auto (sans constante magique) :
+#    % affiche = %officiel + (tokens_locaux_maintenant - tokens_locaux_a_l_ancre)
+#                            * %officiel / tokens_locaux_a_l_ancre
+#  -> l'echelle "tokens par %" se deduit du couple (%officiel, tokens a l'ancre).
+#
+#  Repli (si pas de cache officiel) : estimation locale simple.
 # ============================================================================
 
 function Get-TokenUsage {
-    param(
-        [double] $WindowHours = 5,     # utilise seulement pour le repli local
-        [double] $TokenLimit  = 3000000
-    )
+    param([double] $WindowHours = 5, [double] $TokenLimit = 3000000)
 
-    # ---------- 1) SOURCE OFFICIELLE : ~/.claude.json ----------------------
     $mainCfg = Join-Path $env:USERPROFILE '.claude.json'
     if (Test-Path $mainCfg) {
         try {
@@ -24,32 +29,60 @@ function Get-TokenUsage {
             if ($cu -and $cu.utilization -and $cu.utilization.five_hour) {
                 $fh = $cu.utilization.five_hour
                 $sd = $cu.utilization.seven_day
+                $officialPct = [double]$fh.utilization
+                $reset5 = if ($fh.resets_at) { ([datetime]$fh.resets_at).ToUniversalTime() } else { $null }
+                $Ta = if ($cu.fetchedAtMs) { [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$cu.fetchedAtMs).UtcDateTime } else { $null }
 
-                $reset5 = $null
-                if ($fh.resets_at) { $reset5 = ([datetime]$fh.resets_at).ToUniversalTime() }
-                $reset7 = $null
-                if ($sd -and $sd.resets_at) { $reset7 = ([datetime]$sd.resets_at).ToUniversalTime() }
-
-                $ageSec = $null
-                if ($cu.fetchedAtMs) {
-                    $ageSec = [int](([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 1000)
+                # ---- Interpolation locale temps reel (le "vivant") ----------
+                $dispPct = $officialPct
+                if ($reset5 -and $Ta -and $officialPct -gt 0) {
+                    $windowStart = $reset5.AddHours(-$WindowHours)
+                    $locAnchor = 0.0; $locNow = 0.0
+                    $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
+                    # On ne lit QUE les fichiers actifs dans la fenetre (rapide)
+                    $files = Get-ChildItem $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue |
+                             Where-Object { $_.LastWriteTimeUtc -ge $windowStart }
+                    # Extraction RAPIDE par regex (evite ConvertFrom-Json, ~10x plus vite).
+                    # Le 1er "..._tokens" trouve est celui du niveau superieur de "usage".
+                    foreach ($file in $files) {
+                        foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
+                            if ($line -notlike '*"usage"*') { continue }
+                            $mo = [regex]::Match($line, '"output_tokens":(\d+)')
+                            if (-not $mo.Success) { continue }
+                            $mt = [regex]::Match($line, '"timestamp":"([^"]+)"')
+                            if (-not $mt.Success) { continue }
+                            $t = ([datetime]::Parse($mt.Groups[1].Value)).ToUniversalTime()
+                            if ($t -lt $windowStart) { continue }
+                            $mi = [regex]::Match($line, '"input_tokens":(\d+)')
+                            $mc = [regex]::Match($line, '"cache_creation_input_tokens":(\d+)')
+                            $tok = [double]$mo.Groups[1].Value
+                            if ($mi.Success) { $tok += [double]$mi.Groups[1].Value }
+                            if ($mc.Success) { $tok += [double]$mc.Groups[1].Value }
+                            $locNow += $tok
+                            if ($t -le $Ta) { $locAnchor += $tok }
+                        }
+                    }
+                    # On interpole seulement si l'ancre est assez consistante
+                    if ($locAnchor -gt 50000) {
+                        $added = ($locNow - $locAnchor) * $officialPct / $locAnchor
+                        if ($added -lt 0) { $added = 0 }
+                        $dispPct = [math]::Min(100.0, $officialPct + $added)
+                    }
                 }
 
                 return [pscustomobject]@{
-                    Source       = 'live'
-                    Ratio        = [math]::Max(0.0, [math]::Min(1.0, [double]$fh.utilization / 100.0))
-                    ResetTime    = $reset5
-                    WeeklyRatio  = if ($sd) { [math]::Max(0.0, [math]::Min(1.0, [double]$sd.utilization / 100.0)) } else { $null }
-                    WeeklyReset  = $reset7
-                    FetchedAgeSec= $ageSec
-                    TokensUsed   = $null
-                    TokenLimit   = $null
+                    Source        = 'hybrid'
+                    Ratio         = [math]::Max(0.0, [math]::Min(1.0, $dispPct / 100.0))
+                    OfficialRatio = [math]::Max(0.0, [math]::Min(1.0, $officialPct / 100.0))
+                    ResetTime     = $reset5
+                    WeeklyRatio   = if ($sd) { [math]::Max(0.0, [math]::Min(1.0, [double]$sd.utilization / 100.0)) } else { $null }
+                    FetchedAgeSec = if ($cu.fetchedAtMs) { [int](([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 1000) } else { $null }
                 }
             }
-        } catch { }   # en cas de souci de lecture -> on tombe sur le repli local
+        } catch { }
     }
 
-    # ---------- 2) REPLI : estimation locale a partir des .jsonl -----------
+    # ---------- REPLI : estimation locale simple (pas de cache officiel) -----
     $projectsDir = Join-Path $env:USERPROFILE ".claude\projects"
     $files = Get-ChildItem -Path $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue
     $events = New-Object System.Collections.Generic.List[object]
@@ -79,13 +112,11 @@ function Get-TokenUsage {
     $ratio = if ($TokenLimit -gt 0) { [math]::Min([double]$tokensUsed / $TokenLimit, 1.0) } else { 0.0 }
 
     [pscustomobject]@{
-        Source       = 'local'
-        Ratio        = $ratio
-        ResetTime    = $resetTime
-        WeeklyRatio  = $null
-        WeeklyReset  = $null
-        FetchedAgeSec= $null
-        TokensUsed   = [long]$tokensUsed
-        TokenLimit   = [long]$TokenLimit
+        Source        = 'local'
+        Ratio         = $ratio
+        OfficialRatio = $null
+        ResetTime     = $resetTime
+        WeeklyRatio   = $null
+        FetchedAgeSec = $null
     }
 }
