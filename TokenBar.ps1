@@ -37,7 +37,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 # --- Configuration ----------------------------------------------------------
 $configPath = Join-Path $scriptDir 'config.json'
-$config = [pscustomobject]@{ RefreshSeconds = 10; PosRight = -1; PosY = 12; LiveFactor = 0.7 }
+$config = [pscustomobject]@{ RefreshSeconds = 10; PosRight = -1; PosY = 12; LiveFactor = 1.0 }
 if (Test-Path $configPath) {
     try { $s = Get-Content $configPath -Raw | ConvertFrom-Json
           foreach ($p in $s.PSObject.Properties) { $config.$($p.Name) = $p.Value } } catch { }

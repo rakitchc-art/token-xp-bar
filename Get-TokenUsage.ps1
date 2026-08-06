@@ -1,28 +1,31 @@
 # ============================================================================
-#  Get-TokenUsage.ps1  -  Le "cerveau" de la barre (mode HYBRIDE)
+#  Get-TokenUsage.ps1  -  Le "cerveau" de la barre (HYBRIDE AUTO-CALIBRE)
 #  ---------------------------------------------------------------------------
-#  Source d'ancrage : le cache officiel de Claude Code (~/.claude.json,
-#  champ "cachedUsageUtilization.five_hour") = le vrai % du compte (Code + web
-#  + telephone), identique au site et au panneau VS Code.
+#  Ancrage : cache officiel de Claude Code (~/.claude.json, "cachedUsage-
+#  Utilization.five_hour") = vrai % du compte (Code + web + telephone).
 #
-#  Probleme : ce cache n'est rafraichi que de temps en temps par Claude Code.
-#  Solution HYBRIDE : entre deux rafraichissements officiels, on fait AVANCER
-#  la barre en direct grace aux tokens locaux (logs .jsonl, temps reel), puis
-#  on se RE-CALE sur l'exact des que le cache officiel bouge.
+#  Entre deux rafraichissements officiels, on fait avancer la barre en direct
+#  grace aux tokens locaux (logs .jsonl, temps reel), puis on se re-cale sur
+#  l'exact des que l'officiel bouge.
 #
-#  Calibrage auto (sans constante magique) :
-#    % affiche = %officiel + (tokens_locaux_maintenant - tokens_locaux_a_l_ancre)
-#                            * %officiel / tokens_locaux_a_l_ancre
-#  -> l'echelle "tokens par %" se deduit du couple (%officiel, tokens a l'ancre).
-#
-#  Repli (si pas de cache officiel) : estimation locale simple.
+#  AUTO-CALIBRAGE : on APPREND le vrai "tokens locaux par %" en comparant deux
+#  rafraichissements officiels successifs (dP = hausse du %, dL = hausse des
+#  tokens locaux -> taux = dL/dP). C'est exact car chaque hausse du % officiel
+#  vient de la conso locale (tant qu'il n'y a pas d'usage web/telephone). Tant
+#  qu'on n'a pas encore appris, on utilise une estimation de repli (moyenne de
+#  la fenetre). L'etat d'apprentissage persiste entre les appels (dot-source).
 # ============================================================================
 
+# --- Etat d'apprentissage (persiste dans le process) ------------------------
+$script:calTPP = $null   # tokens locaux appris par 1% (taux marginal)
+$script:calP   = $null   # % officiel au dernier rafraichissement
+$script:calL   = $null   # tokens locaux (a l'ancre) au dernier rafraichissement
+$script:calTa  = $null   # horodatage (fetchedAtMs) du dernier rafraichissement
+
 function Get-TokenUsage {
-    # LiveFactor : attenuation de l'estimation "live" (1 = brut, 0.7 = -30%).
-    # Compense la conso telephone/web qui gonfle le % officiel sans toucher aux
-    # tokens locaux. Baisse-le si la barre sur-evalue, monte-le si elle sous-evalue.
-    param([double] $WindowHours = 5, [double] $TokenLimit = 3000000, [double] $LiveFactor = 0.7)
+    # LiveFactor : reglage fin de l'estimation live (1 = neutre). Avec l'auto-
+    # calibrage, 1.0 devrait etre juste ; baisse/monte seulement si besoin.
+    param([double] $WindowHours = 5, [double] $TokenLimit = 3000000, [double] $LiveFactor = 1.0)
 
     $mainCfg = Join-Path $env:USERPROFILE '.claude.json'
     if (Test-Path $mainCfg) {
@@ -36,17 +39,15 @@ function Get-TokenUsage {
                 $reset5 = if ($fh.resets_at) { ([datetime]$fh.resets_at).ToUniversalTime() } else { $null }
                 $Ta = if ($cu.fetchedAtMs) { [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$cu.fetchedAtMs).UtcDateTime } else { $null }
 
-                # ---- Interpolation locale temps reel (le "vivant") ----------
                 $dispPct = $officialPct
-                if ($reset5 -and $Ta -and $officialPct -gt 0) {
+                if ($reset5 -and $Ta -and $officialPct -ge 0) {
                     $windowStart = $reset5.AddHours(-$WindowHours)
+
+                    # ---- Somme des tokens locaux : a l'ancre (<= Ta) et maintenant ----
                     $locAnchor = 0.0; $locNow = 0.0
                     $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
-                    # On ne lit QUE les fichiers actifs dans la fenetre (rapide)
                     $files = Get-ChildItem $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue |
                              Where-Object { $_.LastWriteTimeUtc -ge $windowStart }
-                    # Extraction RAPIDE par regex (evite ConvertFrom-Json, ~10x plus vite).
-                    # Le 1er "..._tokens" trouve est celui du niveau superieur de "usage".
                     foreach ($file in $files) {
                         foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
                             if ($line -notlike '*"usage"*') { continue }
@@ -65,10 +66,31 @@ function Get-TokenUsage {
                             if ($t -le $Ta) { $locAnchor += $tok }
                         }
                     }
-                    # On interpole seulement si l'ancre est assez consistante
-                    if ($locAnchor -gt 50000) {
-                        $added = $LiveFactor * ($locNow - $locAnchor) * $officialPct / $locAnchor
-                        if ($added -lt 0) { $added = 0 }
+
+                    # ---- Apprentissage a chaque nouveau rafraichissement officiel ----
+                    if ($script:calTa -ne $Ta) {
+                        if ($null -ne $script:calTa -and $null -ne $script:calP -and $officialPct -gt $script:calP) {
+                            $dP = $officialPct - $script:calP
+                            $dL = $locAnchor - [double]$script:calL
+                            if ($dP -ge 0.5 -and $dL -gt 10000) {
+                                $learned = $dL / $dP
+                                if ($script:calTPP) { $script:calTPP = 0.6 * $script:calTPP + 0.4 * $learned }
+                                else                { $script:calTPP = $learned }
+                            }
+                        }
+                        $script:calTa = $Ta; $script:calP = $officialPct; $script:calL = $locAnchor
+                    }
+
+                    # ---- Interpolation live ----
+                    $deltaNow = $locNow - $locAnchor
+                    if ($deltaNow -gt 0) {
+                        if ($script:calTPP -and $script:calTPP -gt 0) {
+                            $added = $LiveFactor * $deltaNow / $script:calTPP          # taux APPRIS (precis)
+                        } elseif ($locAnchor -gt 50000 -and $officialPct -gt 0) {
+                            $added = $LiveFactor * $deltaNow * $officialPct / $locAnchor  # repli (moyenne fenetre)
+                        } else { $added = 0 }
+                        if ($added -lt 0)  { $added = 0 }
+                        if ($added -gt 20) { $added = 20 }                              # garde-fou
                         $dispPct = [math]::Min(100.0, $officialPct + $added)
                     }
                 }
@@ -79,6 +101,7 @@ function Get-TokenUsage {
                     OfficialRatio = [math]::Max(0.0, [math]::Min(1.0, $officialPct / 100.0))
                     ResetTime     = $reset5
                     WeeklyRatio   = if ($sd) { [math]::Max(0.0, [math]::Min(1.0, [double]$sd.utilization / 100.0)) } else { $null }
+                    TokensPerPct  = $script:calTPP
                     FetchedAgeSec = if ($cu.fetchedAtMs) { [int](([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 1000) } else { $null }
                 }
             }
@@ -113,13 +136,8 @@ function Get-TokenUsage {
         } else { $tokensUsed = 0; $resetTime = $null }
     }
     $ratio = if ($TokenLimit -gt 0) { [math]::Min([double]$tokensUsed / $TokenLimit, 1.0) } else { 0.0 }
-
     [pscustomobject]@{
-        Source        = 'local'
-        Ratio         = $ratio
-        OfficialRatio = $null
-        ResetTime     = $resetTime
-        WeeklyRatio   = $null
-        FetchedAgeSec = $null
+        Source='local'; Ratio=$ratio; OfficialRatio=$null; ResetTime=$resetTime
+        WeeklyRatio=$null; TokensPerPct=$null; FetchedAgeSec=$null
     }
 }
