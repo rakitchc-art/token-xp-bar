@@ -39,12 +39,14 @@ function Get-TokenUsage {
                 $reset5 = if ($fh.resets_at) { ([datetime]$fh.resets_at).ToUniversalTime() } else { $null }
                 $Ta = if ($cu.fetchedAtMs) { [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$cu.fetchedAtMs).UtcDateTime } else { $null }
 
+                $now2  = [datetime]::UtcNow
+                $stale = ($reset5 -and $reset5 -lt $now2)   # cache officiel perime : la fenetre a deja reset
                 $dispPct = $officialPct
                 if ($reset5 -and $Ta -and $officialPct -ge 0) {
-                    $windowStart = $reset5.AddHours(-$WindowHours)
+                    $windowStart = if ($stale) { $reset5 } else { $reset5.AddHours(-$WindowHours) }
 
-                    # ---- Somme des tokens locaux : a l'ancre (<= Ta) et maintenant ----
-                    $locAnchor = 0.0; $locNow = 0.0
+                    # ---- Somme des tokens locaux : ancre (<= Ta), total, 1er evenement ----
+                    $locAnchor = 0.0; $locNow = 0.0; $firstT = $null
                     $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
                     $files = Get-ChildItem $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue |
                              Where-Object { $_.LastWriteTimeUtc -ge $windowStart }
@@ -63,7 +65,25 @@ function Get-TokenUsage {
                             if ($mi.Success) { $tok += [double]$mi.Groups[1].Value }
                             if ($mc.Success) { $tok += [double]$mc.Groups[1].Value }
                             $locNow += $tok
+                            if ($null -eq $firstT -or $t -lt $firstT) { $firstT = $t }
                             if ($t -le $Ta) { $locAnchor += $tok }
+                        }
+                    }
+
+                    # ---- Officiel perime : pont 100% local le temps que Code rafraichisse ----
+                    if ($stale) {
+                        if ($script:calTPP -and $script:calTPP -gt 0) { $dispPct = [math]::Min(100.0, $locNow / $script:calTPP) }
+                        elseif ($TokenLimit -gt 0)                    { $dispPct = [math]::Min(100.0, ($locNow / $TokenLimit) * 100.0) }
+                        else                                          { $dispPct = 0.0 }
+                        $newReset = if ($firstT) { $firstT.AddHours($WindowHours) } else { $null }
+                        return [pscustomobject]@{
+                            Source        = 'local-bridge'
+                            Ratio         = [math]::Max(0.0, [math]::Min(1.0, $dispPct / 100.0))
+                            OfficialRatio = $null
+                            ResetTime     = $newReset
+                            WeeklyRatio   = if ($sd) { [math]::Max(0.0, [math]::Min(1.0, [double]$sd.utilization / 100.0)) } else { $null }
+                            TokensPerPct  = $script:calTPP
+                            FetchedAgeSec = if ($cu.fetchedAtMs) { [int](([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 1000) } else { $null }
                         }
                     }
 
