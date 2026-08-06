@@ -19,7 +19,10 @@
 # ============================================================================
 
 function Get-TokenUsage {
-    param([double] $WindowHours = 5, [double] $TokenLimit = 3000000)
+    # LiveFactor : attenuation de l'estimation "live" (1 = brut, 0.7 = -30%).
+    # Compense la conso telephone/web qui gonfle le % officiel sans toucher aux
+    # tokens locaux. Baisse-le si la barre sur-evalue, monte-le si elle sous-evalue.
+    param([double] $WindowHours = 5, [double] $TokenLimit = 3000000, [double] $LiveFactor = 0.7)
 
     $mainCfg = Join-Path $env:USERPROFILE '.claude.json'
     if (Test-Path $mainCfg) {
@@ -64,7 +67,7 @@ function Get-TokenUsage {
                     }
                     # On interpole seulement si l'ancre est assez consistante
                     if ($locAnchor -gt 50000) {
-                        $added = ($locNow - $locAnchor) * $officialPct / $locAnchor
+                        $added = $LiveFactor * ($locNow - $locAnchor) * $officialPct / $locAnchor
                         if ($added -lt 0) { $added = 0 }
                         $dispPct = [math]::Min(100.0, $officialPct + $added)
                     }

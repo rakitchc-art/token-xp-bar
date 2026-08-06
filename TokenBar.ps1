@@ -37,7 +37,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 # --- Configuration ----------------------------------------------------------
 $configPath = Join-Path $scriptDir 'config.json'
-$config = [pscustomobject]@{ RefreshSeconds = 10; PosRight = -1; PosY = 12 }
+$config = [pscustomobject]@{ RefreshSeconds = 10; PosRight = -1; PosY = 12; LiveFactor = 0.7 }
 if (Test-Path $configPath) {
     try { $s = Get-Content $configPath -Raw | ConvertFrom-Json
           foreach ($p in $s.PSObject.Properties) { $config.$($p.Name) = $p.Value } } catch { }
@@ -162,7 +162,7 @@ function Format-Reset($resetUtc) {
     return ("reset {0} min" -f $mins)
 }
 function Update-Bar {
-    $u = Get-TokenUsage
+    $u = Get-TokenUsage -LiveFactor $config.LiveFactor
     $script:ratio     = [double]$u.Ratio
     $script:pctText   = "{0:P0}" -f $u.Ratio
     $script:resetText = Format-Reset $u.ResetTime
