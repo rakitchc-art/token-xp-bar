@@ -2,6 +2,9 @@
 # Elle est recreee automatiquement au premier lancement.
 config.json
 
+# Journal de calibration (donnees d'usage perso, genere localement).
+usage-log.csv
+
 # Windows
 Thumbs.db
 Desktop.ini

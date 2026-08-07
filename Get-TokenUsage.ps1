@@ -47,6 +47,7 @@ function Get-TokenUsage {
 
                     # ---- Somme des tokens locaux : ancre (<= Ta), total, 1er evenement ----
                     $locAnchor = 0.0; $locNow = 0.0; $firstT = $null
+                    $inA = 0.0; $outA = 0.0; $ccA = 0.0; $crA = 0.0   # composants bruts a l'ancre (journal)
                     $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
                     $files = Get-ChildItem $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue |
                              Where-Object { $_.LastWriteTimeUtc -ge $windowStart }
@@ -62,17 +63,16 @@ function Get-TokenUsage {
                             $mi = [regex]::Match($line, '"input_tokens":(\d+)')
                             $mc = [regex]::Match($line, '"cache_creation_input_tokens":(\d+)')
                             $mr = [regex]::Match($line, '"cache_read_input_tokens":(\d+)')
-                            # Ponderation calibree : output x5, input x1,
-                            # cache_creation x1.25, cache_read x0.05. Le cache_read
-                            # domine le volume (>30x le reste) ; l'ignorer sous-estimait,
-                            # a 0.1 on sur-estimait -> 0.05 (milieu de l'encadrement).
-                            $tok = 5.0 * [double]$mo.Groups[1].Value
-                            if ($mi.Success) { $tok += [double]$mi.Groups[1].Value }
-                            if ($mc.Success) { $tok += 1.25 * [double]$mc.Groups[1].Value }
-                            if ($mr.Success) { $tok += 0.05 * [double]$mr.Groups[1].Value }
+                            $vOut = [double]$mo.Groups[1].Value
+                            $vIn  = if ($mi.Success) { [double]$mi.Groups[1].Value } else { 0.0 }
+                            $vCc  = if ($mc.Success) { [double]$mc.Groups[1].Value } else { 0.0 }
+                            $vCr  = if ($mr.Success) { [double]$mr.Groups[1].Value } else { 0.0 }
+                            # Ponderation PROVISOIRE (~tarifs), sera recalibree sur le
+                            # journal usage-log.csv : output x5, input x1, cc x1.25, cr x0.05.
+                            $tok = 5.0 * $vOut + $vIn + 1.25 * $vCc + 0.05 * $vCr
                             $locNow += $tok
                             if ($null -eq $firstT -or $t -lt $firstT) { $firstT = $t }
-                            if ($t -le $Ta) { $locAnchor += $tok }
+                            if ($t -le $Ta) { $locAnchor += $tok; $inA += $vIn; $outA += $vOut; $ccA += $vCc; $crA += $vCr }
                         }
                     }
 
@@ -93,7 +93,7 @@ function Get-TokenUsage {
                         }
                     }
 
-                    # ---- Apprentissage a chaque nouveau rafraichissement officiel ----
+                    # ---- A chaque nouveau rafraichissement officiel : apprendre + journaliser ----
                     if ($script:calTa -ne $Ta) {
                         if ($null -ne $script:calTa -and $null -ne $script:calP -and $officialPct -gt $script:calP) {
                             $dP = $officialPct - $script:calP
@@ -104,15 +104,20 @@ function Get-TokenUsage {
                                 else                { $script:calTPP = $learned }
                             }
                         }
+                        # Journal (1 ligne / rafraichissement) pour calibrer sur donnees reelles.
+                        try {
+                            $logPath = Join-Path $PSScriptRoot 'usage-log.csv'
+                            if (-not (Test-Path $logPath)) { 'utc,official_pct,in,out,cc,cr' | Out-File $logPath -Encoding utf8 }
+                            ('{0:o},{1},{2:F0},{3:F0},{4:F0},{5:F0}' -f $Ta, $officialPct, $inA, $outA, $ccA, $crA) | Add-Content $logPath -Encoding utf8
+                        } catch { }
                         $script:calTa = $Ta; $script:calP = $officialPct; $script:calL = $locAnchor
                     }
 
-                    # ---- Ajustement live "fidele & stable" ----
-                    # On colle a l'officiel + une petite nudge amortie et PLAFONNEE
-                    # (le plafond grandit doucement avec l'age du cache, max +3%).
-                    # Resultat : sur une rafale la barre retarde un peu puis se recale
-                    # au prochain rafraichissement, au lieu de swinguer. La source a
-                    # ~5-6 min de retard : on ne cherche pas a la battre, on la suit.
+                    # ---- Ajustement live (REACTIF) : comble le retard du cache (~5-6 min) ----
+                    # On estime la conso locale depuis le dernier fetch pour refleter
+                    # l'usage reel. Plafond GENEREUX lie a l'age du cache (evite un
+                    # emballement sans brider). En attendant la recalibration sur le
+                    # journal, c'est deja bien plus proche que l'officiel fige.
                     $deltaNow = $locNow - $locAnchor
                     if ($deltaNow -gt 0) {
                         if ($script:calTPP -and $script:calTPP -gt 0) {
@@ -121,8 +126,8 @@ function Get-TokenUsage {
                             $raw = $deltaNow * $officialPct / $locAnchor               # repli (moyenne fenetre)
                         } else { $raw = 0 }
                         $ageMin = if ($cu.fetchedAtMs) { ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 60000.0 } else { 0 }
-                        $cap    = [math]::Min(3.0, 0.6 * $ageMin)                      # plafond : ~0.6%/min, max +3%
-                        $added  = [math]::Min($LiveFactor * 0.5 * $raw, $cap)          # amorti (x0.5) puis plafonne
+                        $cap    = [math]::Min(20.0, 2.5 * ($ageMin + 1))              # plafond genereux (anti-emballement)
+                        $added  = [math]::Min($LiveFactor * $raw, $cap)
                         if ($added -lt 0) { $added = 0 }
                         $dispPct = [math]::Min(100.0, $officialPct + $added)
                     }
