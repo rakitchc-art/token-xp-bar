@@ -62,14 +62,14 @@ function Get-TokenUsage {
                             $mi = [regex]::Match($line, '"input_tokens":(\d+)')
                             $mc = [regex]::Match($line, '"cache_creation_input_tokens":(\d+)')
                             $mr = [regex]::Match($line, '"cache_read_input_tokens":(\d+)')
-                            # Ponderation ~ tarifs (la limite 5h suit l'usage pondere) :
-                            # output x5, input x1, cache_creation x1.25, cache_read x0.1.
-                            # cache_read domine le volume (souvent >30x le reste) ; l'ignorer
-                            # sous-estimait fort en usage intense (gros contexte relu).
+                            # Ponderation calibree : output x5, input x1,
+                            # cache_creation x1.25, cache_read x0.05. Le cache_read
+                            # domine le volume (>30x le reste) ; l'ignorer sous-estimait,
+                            # a 0.1 on sur-estimait -> 0.05 (milieu de l'encadrement).
                             $tok = 5.0 * [double]$mo.Groups[1].Value
                             if ($mi.Success) { $tok += [double]$mi.Groups[1].Value }
                             if ($mc.Success) { $tok += 1.25 * [double]$mc.Groups[1].Value }
-                            if ($mr.Success) { $tok += 0.1 * [double]$mr.Groups[1].Value }
+                            if ($mr.Success) { $tok += 0.05 * [double]$mr.Groups[1].Value }
                             $locNow += $tok
                             if ($null -eq $firstT -or $t -lt $firstT) { $firstT = $t }
                             if ($t -le $Ta) { $locAnchor += $tok }
@@ -144,7 +144,7 @@ function Get-TokenUsage {
             try { $obj = $line | ConvertFrom-Json } catch { continue }
             $usage = $obj.message.usage
             if ($null -eq $usage -or $null -eq $obj.timestamp) { continue }
-            $tokens = [double]$usage.input_tokens + 5.0 * [double]$usage.output_tokens + 1.25 * [double]$usage.cache_creation_input_tokens + 0.1 * [double]$usage.cache_read_input_tokens
+            $tokens = [double]$usage.input_tokens + 5.0 * [double]$usage.output_tokens + 1.25 * [double]$usage.cache_creation_input_tokens + 0.05 * [double]$usage.cache_read_input_tokens
             $events.Add([pscustomobject]@{ Time = [datetime]::Parse($obj.timestamp).ToUniversalTime(); Tokens = $tokens })
         }
     }
