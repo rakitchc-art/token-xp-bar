@@ -107,16 +107,23 @@ function Get-TokenUsage {
                         $script:calTa = $Ta; $script:calP = $officialPct; $script:calL = $locAnchor
                     }
 
-                    # ---- Interpolation live ----
+                    # ---- Ajustement live "fidele & stable" ----
+                    # On colle a l'officiel + une petite nudge amortie et PLAFONNEE
+                    # (le plafond grandit doucement avec l'age du cache, max +3%).
+                    # Resultat : sur une rafale la barre retarde un peu puis se recale
+                    # au prochain rafraichissement, au lieu de swinguer. La source a
+                    # ~5-6 min de retard : on ne cherche pas a la battre, on la suit.
                     $deltaNow = $locNow - $locAnchor
                     if ($deltaNow -gt 0) {
                         if ($script:calTPP -and $script:calTPP -gt 0) {
-                            $added = $LiveFactor * $deltaNow / $script:calTPP          # taux APPRIS (precis)
+                            $raw = $deltaNow / $script:calTPP                          # taux appris
                         } elseif ($locAnchor -gt 50000 -and $officialPct -gt 0) {
-                            $added = $LiveFactor * $deltaNow * $officialPct / $locAnchor  # repli (moyenne fenetre)
-                        } else { $added = 0 }
-                        if ($added -lt 0)  { $added = 0 }
-                        if ($added -gt 20) { $added = 20 }                              # garde-fou
+                            $raw = $deltaNow * $officialPct / $locAnchor               # repli (moyenne fenetre)
+                        } else { $raw = 0 }
+                        $ageMin = if ($cu.fetchedAtMs) { ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 60000.0 } else { 0 }
+                        $cap    = [math]::Min(3.0, 0.6 * $ageMin)                      # plafond : ~0.6%/min, max +3%
+                        $added  = [math]::Min($LiveFactor * 0.5 * $raw, $cap)          # amorti (x0.5) puis plafonne
+                        if ($added -lt 0) { $added = 0 }
                         $dispPct = [math]::Min(100.0, $officialPct + $added)
                     }
                 }
