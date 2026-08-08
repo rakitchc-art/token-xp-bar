@@ -11,15 +11,32 @@
 #  (points par MILLION de tokens : entree+sortie plein pot, creation de cache
 #  ~1/8, lecture de cache ~1/570 ; 100% ~ 1.12M tokens-equivalents).
 #
-#  ANCRAGE PAR DECALAGE : on calcule la formule a l'ancre (dernier fetch) et
-#  maintenant. offset = officiel - formule(ancre) capte le "hors-local" (web/
-#  telephone + residu) ; on le reporte sur la formule(maintenant). Resultat :
-#  reactif en direct ET recale sur l'officiel a chaque fetch, sans plafond.
-#  On continue a journaliser (usage-log.csv) pour re-verifier les poids.
+#  ANCRAGE PAR DECALAGE : dispPct = officiel + echelle x (formule_maintenant -
+#  formule_ancre). L'officiel porte le niveau (dont usage web/telephone) ; la
+#  marge comble le retard (~5-6 min) du cache. Reactif ET recale, sans plafond.
+#
+#  ECHELLE DU PLAN (Pro/Max) : le % officiel est normalise par plan et la vraie
+#  limite en tokens n'est PAS exposee. Les poids RELATIFS (sortie/cache) sont
+#  communs a tous les plans ; seule l'echelle globale change. On l'APPREND :
+#  entre deux fetchs, echelle ~ (d officiel) / (d formule). Pro -> ~1 ; Max ->
+#  <1, converge seul. Persistee dans calib-state.json (survit au redemarrage).
+#  On journalise (usage-log.csv) pour re-verifier les poids relatifs.
 # ============================================================================
 
-# --- Etat (persiste dans le process via dot-source) -------------------------
-$script:calTa  = $null   # horodatage du dernier rafraichissement officiel journalise
+# --- Etat (persiste entre appels dans le process ; l'echelle va sur disque) --
+$script:calTa           = $null   # dernier fetch officiel journalise (anti-doublon)
+$script:calPrevOff      = $null   # % officiel au fetch precedent
+$script:calPrevEstRaw   = $null   # formule brute (echelle 1) a l'ancre du fetch precedent
+$script:calScale        = 1.0     # facteur d'echelle du PLAN (Pro=1 ; Max<1). Auto-appris.
+$script:calScaleLearned = $false  # a-t-on deja une mesure fiable ?
+$script:calStatePath    = Join-Path $PSScriptRoot 'calib-state.json'
+try {
+    if (Test-Path $script:calStatePath) {
+        $st = Get-Content $script:calStatePath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($st.scale)   { $script:calScale = [double]$st.scale }
+        if ($st.learned) { $script:calScaleLearned = [bool]$st.learned }
+    }
+} catch { }
 
 function Get-TokenUsage {
     # LiveFactor : reglage fin de l'estimation live (1 = neutre). Avec l'auto-
@@ -79,9 +96,9 @@ function Get-TokenUsage {
                     $estNow    = (($inN + $outN) * $wIO + $ccN * $wCC + $crN * $wCR) / 1e6
                     $estAnchor = (($inA + $outA) * $wIO + $ccA * $wCC + $crA * $wCR) / 1e6
 
-                    # ---- Officiel perime : la fenetre a reset, on affiche la formule pure ----
+                    # ---- Officiel perime : la fenetre a reset, on affiche la formule (a l'echelle du plan) ----
                     if ($stale) {
-                        $dispPct = [math]::Max(0.0, [math]::Min(100.0, $estNow))
+                        $dispPct = [math]::Max(0.0, [math]::Min(100.0, $script:calScale * $estNow))
                         $newReset = if ($firstT) { $firstT.AddHours($WindowHours) } else { $null }
                         return [pscustomobject]@{
                             Source        = 'local-bridge'
@@ -94,8 +111,26 @@ function Get-TokenUsage {
                         }
                     }
 
-                    # ---- A chaque nouveau rafraichissement officiel : journaliser (re-verif des poids) ----
+                    # ---- A chaque nouveau rafraichissement officiel : apprendre l'echelle + journaliser ----
                     if ($script:calTa -ne $Ta) {
+                        # Echelle du plan = pente reelle / pente-formule entre deux fetchs.
+                        # Isole le marginal LOCAL (dRaw) -> annule l'offset web/tel constant.
+                        # Pro reste ~1 ; Max converge tout seul vers sa vraie valeur (<1).
+                        if ($null -ne $script:calPrevOff -and $null -ne $script:calPrevEstRaw) {
+                            $dOff = $officialPct - $script:calPrevOff
+                            $dRaw = $estAnchor  - $script:calPrevEstRaw
+                            if ($dRaw -gt 3.0 -and $dOff -gt 0.5) {
+                                $kInst = $dOff / $dRaw
+                                if ($kInst -lt 0.02) { $kInst = 0.02 }
+                                if ($kInst -gt 3.0)  { $kInst = 3.0 }
+                                if (-not $script:calScaleLearned) { $script:calScale = $kInst; $script:calScaleLearned = $true }
+                                else { $script:calScale = 0.7 * $script:calScale + 0.3 * $kInst }
+                                try { ([pscustomobject]@{ scale = $script:calScale; learned = $true } | ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
+                            }
+                        }
+                        $script:calPrevOff    = $officialPct
+                        $script:calPrevEstRaw = $estAnchor
+                        # Journal (re-verif des poids relatifs sur donnees reelles).
                         try {
                             $logPath = Join-Path $PSScriptRoot 'usage-log.csv'
                             if (-not (Test-Path $logPath)) { 'utc,official_pct,in,out,cc,cr' | Out-File $logPath -Encoding utf8 }
@@ -104,11 +139,12 @@ function Get-TokenUsage {
                         $script:calTa = $Ta
                     }
 
-                    # ---- Affichage : formule en direct, recalee sur l'officiel (sans plafond) ----
-                    #  offset = ce que l'officiel a en plus du local a l'ancre (usage web/tel + residu).
-                    #  On le reporte sur l'estimation "maintenant" -> reactif ET ancre.
-                    $offset  = $officialPct - $estAnchor
-                    $dispPct = [math]::Max(0.0, [math]::Min(100.0, ($estNow + $offset) * $LiveFactor + $officialPct * (1 - $LiveFactor)))
+                    # ---- Affichage : officiel + marge reactive locale, a l'echelle du plan ----
+                    #  dispPct = officiel + LiveFactor * echelle * (formule_maintenant - formule_ancre).
+                    #  L'officiel porte le niveau (dont usage web) ; la marge comble le retard du
+                    #  cache. Pas de plafond : l'echelle bornee (0.02..3) suffit a eviter l'emballement.
+                    $marge   = $script:calScale * ($estNow - $estAnchor)
+                    $dispPct = [math]::Max(0.0, [math]::Min(100.0, $officialPct + $LiveFactor * $marge))
                 }
 
                 return [pscustomobject]@{
@@ -152,8 +188,8 @@ function Get-TokenUsage {
             $tokensUsed = ($sorted | Where-Object { $_.Time -ge $windowStart } | Measure-Object -Property Tokens -Sum).Sum
         } else { $tokensUsed = 0; $resetTime = $null }
     }
-    # tokensUsed est deja en POINTS de % (formule calibree) -> ratio = points / 100.
-    $ratio = [math]::Max(0.0, [math]::Min([double]$tokensUsed / 100.0, 1.0))
+    # tokensUsed est deja en POINTS de % (formule calibree), a l'echelle du plan.
+    $ratio = [math]::Max(0.0, [math]::Min($script:calScale * [double]$tokensUsed / 100.0, 1.0))
     [pscustomobject]@{
         Source='local'; Ratio=$ratio; OfficialRatio=$null; ResetTime=$resetTime
         WeeklyRatio=$null; TokensPerPct=$null; FetchedAgeSec=$null

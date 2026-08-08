@@ -5,6 +5,9 @@ config.json
 # Journal de calibration (donnees d'usage perso, genere localement).
 usage-log.csv
 
+# Echelle du plan apprise (specifique a la machine/au compte).
+calib-state.json
+
 # Windows
 Thumbs.db
 Desktop.ini
