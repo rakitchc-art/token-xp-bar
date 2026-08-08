@@ -8,6 +8,20 @@ uniquement quand VS Code est ta fenetre active.
 
 
 ────────────────────────────────────────────────────────────
+  AVANT DE COMMENCER  (une seule chose)
+────────────────────────────────────────────────────────────
+
+  Il faut avoir CLAUDE CODE installe dans VS Code et etre
+  connecte a ton compte (dans un terminal : tape "claude",
+  puis "/login" et suis les etapes).
+
+  -> La barre lit AUTOMATIQUEMENT ton compte, quel qu'il soit
+     (Claude Pro OU Max) : rien a configurer, rien a coller.
+     Elle s'ajuste toute seule a ta limite en quelques minutes
+     d'utilisation.
+
+
+────────────────────────────────────────────────────────────
   INSTALLATION  (super simple)
 ────────────────────────────────────────────────────────────
 

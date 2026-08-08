@@ -19,6 +19,7 @@ La jauge se remplit du **vert** (0 %) au **rouge** (100 %), avec le pourcentage
 - 👀 Visible **seulement quand VS Code est actif** (disparaît quand tu changes de fenêtre).
 - ⏱️ Survol → temps avant reset. Glisser → déplacer. Clic → rafraîchir. Clic droit → menu.
 - 🚀 Démarrage automatique avec Windows.
+- 🔌 **S'adapte tout seul à ton compte** (Pro ou Max) : aucune config, aucune limite à saisir.
 
 ---
 
@@ -54,7 +55,13 @@ dès que Claude Code y écrit une nouvelle valeur.
 ## 📋 Prérequis
 
 - **Windows** (10 / 11) — utilise PowerShell + WinForms (déjà inclus, rien à installer).
-- **VS Code** avec **Claude Code** (c'est lui qui fournit le chiffre officiel).
+- **VS Code** avec **Claude Code**, **connecté à ton compte** (`claude` → `/login`).
+  C'est lui qui fournit le chiffre officiel.
+
+> 🔌 **Aucune configuration de compte.** La barre lit automatiquement le compte
+> connecté à Claude Code — **Pro ou Max**, peu importe. La limite en tokens
+> diffère selon le plan : la barre l'**apprend toute seule** en quelques
+> rafraîchissements et s'y cale (aucun réglage manuel).
 
 ---
 
