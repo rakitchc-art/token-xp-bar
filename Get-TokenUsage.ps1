@@ -18,8 +18,10 @@
 #  ECHELLE DU PLAN (Pro/Max) : le % officiel est normalise par plan et la vraie
 #  limite en tokens n'est PAS exposee. Les poids RELATIFS (sortie/cache) sont
 #  communs a tous les plans ; seule l'echelle globale change. On l'APPREND :
-#  entre deux fetchs, echelle ~ (d officiel) / (d formule). Pro -> ~1 ; Max ->
-#  <1, converge seul. Persistee dans calib-state.json (survit au redemarrage).
+#  (a) AMORCAGE des le 1er fetch exploitable : echelle ~ officiel/formule (bon
+#  ordre de grandeur tout de suite, tout plan) ; (b) AFFINAGE par pente entre
+#  deux fetchs : echelle ~ (d officiel)/(d formule) (precis, annule l'offset
+#  web). Pro -> ~1 ; Max -> <1. Persistee dans calib-state.json (survit au redemarrage).
 #  On journalise (usage-log.csv) pour re-verifier les poids relatifs.
 # ============================================================================
 
@@ -29,6 +31,7 @@ $script:calPrevOff      = $null   # % officiel au fetch precedent
 $script:calPrevEstRaw   = $null   # formule brute (echelle 1) a l'ancre du fetch precedent
 $script:calScale        = 1.0     # facteur d'echelle du PLAN (Pro=1 ; Max<1). Auto-appris.
 $script:calScaleLearned = $false  # a-t-on deja une mesure fiable ?
+$script:calN            = 0        # nb d'affinages par pente (poids plus fort au debut)
 $script:calStatePath    = Join-Path $PSScriptRoot 'calib-state.json'
 try {
     if (Test-Path $script:calStatePath) {
@@ -47,6 +50,16 @@ function Get-TokenUsage {
     if (Test-Path $mainCfg) {
         try {
             $d = Get-Content $mainCfg -Raw -ErrorAction Stop | ConvertFrom-Json
+            # Seed d'echelle selon le PLAN reconnu (une seule fois). Les poids de la
+            # formule sont calibres sur Claude Pro -> echelle exacte = 1.0. Les autres
+            # plans (Max...) restent en auto-apprentissage (amorcage + pente).
+            if (-not $script:calScaleLearned) {
+                $plan = try { [string]$d.oauthAccount.organizationType } catch { '' }
+                if ($plan -eq 'claude_pro') {
+                    $script:calScale = 1.0; $script:calScaleLearned = $true
+                    try { ([pscustomobject]@{ scale = 1.0; learned = $true } | ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
+                }
+            }
             $cu = $d.cachedUsageUtilization
             if ($cu -and $cu.utilization -and $cu.utilization.five_hour) {
                 $fh = $cu.utilization.five_hour
@@ -116,6 +129,8 @@ function Get-TokenUsage {
                         # Echelle du plan = pente reelle / pente-formule entre deux fetchs.
                         # Isole le marginal LOCAL (dRaw) -> annule l'offset web/tel constant.
                         # Pro reste ~1 ; Max converge tout seul vers sa vraie valeur (<1).
+                        $updated = $false
+                        # (a) Affinage par PENTE (precis) : d officiel / d formule entre 2 fetchs.
                         if ($null -ne $script:calPrevOff -and $null -ne $script:calPrevEstRaw) {
                             $dOff = $officialPct - $script:calPrevOff
                             $dRaw = $estAnchor  - $script:calPrevEstRaw
@@ -123,10 +138,22 @@ function Get-TokenUsage {
                                 $kInst = $dOff / $dRaw
                                 if ($kInst -lt 0.02) { $kInst = 0.02 }
                                 if ($kInst -gt 3.0)  { $kInst = 3.0 }
-                                if (-not $script:calScaleLearned) { $script:calScale = $kInst; $script:calScaleLearned = $true }
-                                else { $script:calScale = 0.7 * $script:calScale + 0.3 * $kInst }
-                                try { ([pscustomobject]@{ scale = $script:calScale; learned = $true } | ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
+                                if (-not $script:calScaleLearned) { $script:calScale = $kInst }
+                                else { $w = if ($script:calN -lt 3) { 0.5 } else { 0.3 }; $script:calScale = (1 - $w) * $script:calScale + $w * $kInst }
+                                $script:calScaleLearned = $true; $script:calN++; $updated = $true
                             }
+                        }
+                        # (b) AMORCAGE immediat (des le 1er fetch exploitable) : echelle ~ officiel/formule.
+                        #     Donne le bon ordre de grandeur tout de suite pour N'IMPORTE QUEL plan,
+                        #     sans attendre une 2e mesure ; la pente (a) affine ensuite.
+                        if (-not $script:calScaleLearned -and $estAnchor -gt 5.0 -and $officialPct -gt 1.0) {
+                            $kBoot = $officialPct / $estAnchor
+                            if ($kBoot -lt 0.02) { $kBoot = 0.02 }
+                            if ($kBoot -gt 3.0)  { $kBoot = 3.0 }
+                            $script:calScale = $kBoot; $script:calScaleLearned = $true; $updated = $true
+                        }
+                        if ($updated) {
+                            try { ([pscustomobject]@{ scale = $script:calScale; learned = $true } | ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
                         }
                         $script:calPrevOff    = $officialPct
                         $script:calPrevEstRaw = $estAnchor
