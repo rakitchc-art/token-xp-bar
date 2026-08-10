@@ -22,6 +22,8 @@
 #  ordre de grandeur tout de suite, tout plan) ; (b) AFFINAGE par pente entre
 #  deux fetchs : echelle ~ (d officiel)/(d formule) (precis, annule l'offset
 #  web). Pro -> ~1 ; Max -> <1. Persistee dans calib-state.json (survit au redemarrage).
+#  L'echelle est LIEE AU COMPTE (accountUuid) : si le compte connecte change
+#  (Pro <-> Max, autre user), on repart de zero pour ne pas melanger les limites.
 #  On journalise (usage-log.csv) pour re-verifier les poids relatifs.
 # ============================================================================
 
@@ -32,14 +34,21 @@ $script:calPrevEstRaw   = $null   # formule brute (echelle 1) a l'ancre du fetch
 $script:calScale        = 1.0     # facteur d'echelle du PLAN (Pro=1 ; Max<1). Auto-appris.
 $script:calScaleLearned = $false  # a-t-on deja une mesure fiable ?
 $script:calN            = 0        # nb d'affinages par pente (poids plus fort au debut)
+$script:calAccount      = $null    # compte (accountUuid) auquel l'echelle apprise appartient
 $script:calStatePath    = Join-Path $PSScriptRoot 'calib-state.json'
 try {
     if (Test-Path $script:calStatePath) {
         $st = Get-Content $script:calStatePath -Raw -ErrorAction Stop | ConvertFrom-Json
         if ($st.scale)   { $script:calScale = [double]$st.scale }
         if ($st.learned) { $script:calScaleLearned = [bool]$st.learned }
+        if ($st.account) { $script:calAccount = [string]$st.account }
     }
 } catch { }
+
+function Save-CalState {
+    try { ([pscustomobject]@{ scale = $script:calScale; learned = $script:calScaleLearned; account = $script:calAccount } |
+           ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
+}
 
 function Get-TokenUsage {
     # LiveFactor : reglage fin de l'estimation live (1 = neutre). Avec l'auto-
@@ -50,14 +59,27 @@ function Get-TokenUsage {
     if (Test-Path $mainCfg) {
         try {
             $d = Get-Content $mainCfg -Raw -ErrorAction Stop | ConvertFrom-Json
-            # Seed d'echelle selon le PLAN reconnu (une seule fois). Les poids de la
-            # formule sont calibres sur Claude Pro -> echelle exacte = 1.0. Les autres
-            # plans (Max...) restent en auto-apprentissage (amorcage + pente).
+
+            # ---- Changement de COMPTE : l'echelle est propre a un compte (Pro/Max
+            #      ont des limites differentes). Si le compte connecte a change, on
+            #      repart de zero pour ne pas appliquer l'ancienne echelle au nouveau.
+            $acct = try { [string]$d.oauthAccount.accountUuid } catch { '' }
+            if (-not $acct) { $acct = try { [string]$d.cachedUsageUtilization.accountUuid } catch { '' } }
+            if ($acct -and $script:calAccount -ne $acct) {
+                $script:calScale = 1.0; $script:calScaleLearned = $false; $script:calN = 0
+                $script:calPrevOff = $null; $script:calPrevEstRaw = $null
+                $script:calAccount = $acct
+                Save-CalState
+            }
+
+            # ---- Seed d'echelle selon le PLAN reconnu (une seule fois). Les poids de la
+            #      formule sont calibres sur Claude Pro -> echelle exacte = 1.0. Les autres
+            #      plans (Max...) restent en auto-apprentissage (amorcage + pente).
             if (-not $script:calScaleLearned) {
                 $plan = try { [string]$d.oauthAccount.organizationType } catch { '' }
                 if ($plan -eq 'claude_pro') {
                     $script:calScale = 1.0; $script:calScaleLearned = $true
-                    try { ([pscustomobject]@{ scale = 1.0; learned = $true } | ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
+                    Save-CalState
                 }
             }
             $cu = $d.cachedUsageUtilization
@@ -109,6 +131,17 @@ function Get-TokenUsage {
                     $estNow    = (($inN + $outN) * $wIO + $ccN * $wCC + $crN * $wCR) / 1e6
                     $estAnchor = (($inA + $outA) * $wIO + $ccA * $wCC + $crA * $wCR) / 1e6
 
+                    # ---- AMORCAGE immediat : des qu'on a un peu d'usage et un officiel > 1,
+                    #      echelle ~ officiel/formule(ancre). Fixe le bon ordre de grandeur EN UNE
+                    #      SECONDE pour tout plan (evite de sur-estimer en attendant un 2e fetch).
+                    #      La pente (bloc "nouveau fetch") affine ensuite. Ne s'applique qu'une fois.
+                    if (-not $script:calScaleLearned -and $estAnchor -gt 5.0 -and $officialPct -gt 1.0) {
+                        $kBoot = $officialPct / $estAnchor
+                        if ($kBoot -lt 0.02) { $kBoot = 0.02 }
+                        if ($kBoot -gt 3.0)  { $kBoot = 3.0 }
+                        $script:calScale = $kBoot; $script:calScaleLearned = $true; Save-CalState
+                    }
+
                     # ---- Officiel perime : la fenetre a reset, on affiche la formule (a l'echelle du plan) ----
                     if ($stale) {
                         $dispPct = [math]::Max(0.0, [math]::Min(100.0, $script:calScale * $estNow))
@@ -143,18 +176,7 @@ function Get-TokenUsage {
                                 $script:calScaleLearned = $true; $script:calN++; $updated = $true
                             }
                         }
-                        # (b) AMORCAGE immediat (des le 1er fetch exploitable) : echelle ~ officiel/formule.
-                        #     Donne le bon ordre de grandeur tout de suite pour N'IMPORTE QUEL plan,
-                        #     sans attendre une 2e mesure ; la pente (a) affine ensuite.
-                        if (-not $script:calScaleLearned -and $estAnchor -gt 5.0 -and $officialPct -gt 1.0) {
-                            $kBoot = $officialPct / $estAnchor
-                            if ($kBoot -lt 0.02) { $kBoot = 0.02 }
-                            if ($kBoot -gt 3.0)  { $kBoot = 3.0 }
-                            $script:calScale = $kBoot; $script:calScaleLearned = $true; $updated = $true
-                        }
-                        if ($updated) {
-                            try { ([pscustomobject]@{ scale = $script:calScale; learned = $true } | ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
-                        }
+                        if ($updated) { Save-CalState }
                         $script:calPrevOff    = $officialPct
                         $script:calPrevEstRaw = $estAnchor
                         # Journal (re-verif des poids relatifs sur donnees reelles).
