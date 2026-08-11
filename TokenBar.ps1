@@ -97,10 +97,13 @@ $panel.GetType().GetProperty('DoubleBuffered',
     [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic
 ).SetValue($panel, $true, $null)
 
-$script:ratio     = 0.0
-$script:pctText   = '0%'
-$script:resetText = 'reset ?'
-$script:hover     = $false
+$script:ratio           = 0.0
+$script:pctText         = '0%'
+$script:resetText       = 'reset ?'
+$script:weeklyText      = ''
+$script:hover           = $false
+$script:lastResetTime   = $null
+$script:lastWeeklyRatio = $null
 
 $panel.Add_Paint({
     param($src, $e)
@@ -148,7 +151,10 @@ $panel.Add_Paint({
         $g.FillPath($ob,$outer); $ob.Dispose()
         $g.DrawPath($ol,$outer)                  # contour redessine par-dessus (net)
         $rf=New-Object System.Drawing.Rectangle ([int]$bx),0,([int]$bw),$H
-        [System.Windows.Forms.TextRenderer]::DrawText($g,$script:resetText,$font,$rf,([System.Drawing.Color]::FromArgb(238,238,238)),$TXTFLAGS)
+        $hoverFont = if ($script:weeklyText) { New-Object System.Drawing.Font 'Segoe UI',8.5,([System.Drawing.FontStyle]::Bold) } else { $font }
+        $hoverLine = if ($script:weeklyText) { "$script:resetText  ·  $script:weeklyText" } else { $script:resetText }
+        [System.Windows.Forms.TextRenderer]::DrawText($g,$hoverLine,$hoverFont,$rf,([System.Drawing.Color]::FromArgb(238,238,238)),$TXTFLAGS)
+        if ($script:weeklyText) { $hoverFont.Dispose() }
     }
     $ol.Dispose(); $outer.Dispose(); $font.Dispose()
 })
@@ -163,9 +169,12 @@ function Format-Reset($resetUtc) {
 }
 function Update-Bar {
     $u = Get-TokenUsage -LiveFactor $config.LiveFactor
-    $script:ratio     = [double]$u.Ratio
-    $script:pctText   = "{0:P0}" -f $u.Ratio
-    $script:resetText = Format-Reset $u.ResetTime
+    $script:ratio           = [double]$u.Ratio
+    $script:pctText         = "{0:P0}" -f $u.Ratio
+    $script:lastResetTime   = $u.ResetTime
+    $script:lastWeeklyRatio = $u.WeeklyRatio
+    $script:resetText       = Format-Reset $u.ResetTime
+    $script:weeklyText      = if ($null -ne $u.WeeklyRatio) { "{0:P0} sem." -f $u.WeeklyRatio } else { '' }
     $panel.Invalidate()
 }
 
@@ -231,14 +240,23 @@ $visTimer = New-Object System.Windows.Forms.Timer
 $visTimer.Interval = 500
 $visTimer.Add_Tick({ Sync-Visibility }); $visTimer.Start()
 
-# Survol FIABLE : on surveille la position de la souris (plus de blocage)
+# Survol FIABLE : on surveille la position de la souris (plus de blocage).
+# INSTANTANE : on ne relance PAS Get-TokenUsage (lecture des .jsonl, couteux)
+# au survol -> on reformate juste les valeurs deja en cache (Update-Bar les
+# rafraichit en tache de fond toutes les ~4 s). Le compte a rebours reste
+# vivant pendant le survol (recalcul cette partie, pure arithmetique).
 $hoverTimer = New-Object System.Windows.Forms.Timer
 $hoverTimer.Interval = 150
 $hoverTimer.Add_Tick({
     $over = $form.Bounds.Contains([System.Windows.Forms.Cursor]::Position)
-    if ($over -ne $script:hover) {
-        $script:hover = $over
-        if ($over) { Update-Bar } else { $panel.Invalidate() }
+    if ($over) {
+        $script:resetText  = Format-Reset $script:lastResetTime
+        $script:weeklyText = if ($null -ne $script:lastWeeklyRatio) { "{0:P0} sem." -f $script:lastWeeklyRatio } else { '' }
+        $script:hover = $true
+        $panel.Invalidate()
+    } elseif ($script:hover) {
+        $script:hover = $false
+        $panel.Invalidate()
     }
 })
 $hoverTimer.Start()
