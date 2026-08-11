@@ -35,6 +35,21 @@ public class FgWin {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 . (Join-Path $scriptDir 'Get-TokenUsage.ps1')
 
+# --- Calcul en ARRIERE-PLAN ---------------------------------------------------
+# Get-TokenUsage relit tous les .jsonl de la fenetre de 5h (potentiellement gros
+# et de plus en plus lent au fil d'une session active) : l'executer directement
+# sur le thread de l'UI FIGEAIT la fenetre (deplacement saccade, survol qui
+# traine). On le lance dans un runspace separe, sans jamais bloquer l'UI.
+$script:bgRunspace = [runspacefactory]::CreateRunspace()
+$script:bgRunspace.Open()
+$bgInit = [powershell]::Create()
+$bgInit.Runspace = $script:bgRunspace
+[void]$bgInit.AddScript({ param($dir) . (Join-Path $dir 'Get-TokenUsage.ps1') }).AddArgument($scriptDir)
+$bgInit.Invoke() | Out-Null
+$bgInit.Dispose()
+$script:bgPs     = $null
+$script:bgHandle = $null
+
 # --- Configuration ----------------------------------------------------------
 $configPath = Join-Path $scriptDir 'config.json'
 $config = [pscustomobject]@{ RefreshSeconds = 10; PosRight = -1; PosY = 12; LiveFactor = 1.0 }
@@ -167,8 +182,7 @@ function Format-Reset($resetUtc) {
     if ($mins -ge 60) { return ("reset {0}h{1:00}" -f [math]::Floor($mins/60), ($mins%60)) }
     return ("reset {0} min" -f $mins)
 }
-function Update-Bar {
-    $u = Get-TokenUsage -LiveFactor $config.LiveFactor
+function Apply-Usage($u) {
     $script:ratio           = [double]$u.Ratio
     $script:pctText         = "{0:P0}" -f $u.Ratio
     $script:lastResetTime   = $u.ResetTime
@@ -176,6 +190,20 @@ function Update-Bar {
     $script:resetText       = Format-Reset $u.ResetTime
     $script:weeklyText      = if ($null -ne $u.WeeklyRatio) { "{0:P0} sem." -f $u.WeeklyRatio } else { '' }
     $panel.Invalidate()
+}
+function Update-Bar {
+    # Calcul SYNCHRONE : uniquement pour le tout premier affichage au demarrage.
+    Apply-Usage (Get-TokenUsage -LiveFactor $config.LiveFactor)
+}
+function Start-BgUpdate {
+    # Calcul ASYNCHRONE (thread separe) : ne bloque jamais l'UI. Si un calcul
+    # est deja en cours, on ne relance pas (evite d'empiler des appels).
+    if ($script:bgHandle) { return }
+    $ps = [powershell]::Create()
+    $ps.Runspace = $script:bgRunspace
+    [void]$ps.AddScript({ param($lf) Get-TokenUsage -LiveFactor $lf }).AddArgument($config.LiveFactor)
+    $script:bgPs     = $ps
+    $script:bgHandle = $ps.BeginInvoke()
 }
 
 # --- Deplacement + clic = rafraichir ----------------------------------------
@@ -194,13 +222,13 @@ $panel.Add_MouseUp({ param($s,$e)
     if ($script:drag) {
         $script:drag = $false
         if ($script:moved) { $config.PosRight = $form.Left + $form.Width; $config.PosY = $form.Top; Save-Config }
-        else { Update-Bar }
+        else { Start-BgUpdate }
     }
 })
 
 # --- Menu clic droit --------------------------------------------------------
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$miRefresh = $menu.Items.Add("Actualiser maintenant"); $miRefresh.Add_Click({ Update-Bar })
+$miRefresh = $menu.Items.Add("Actualiser maintenant"); $miRefresh.Add_Click({ Start-BgUpdate })
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miClose = $menu.Items.Add("Fermer"); $miClose.Add_Click({ $form.Close() })
 $panel.ContextMenuStrip = $menu
@@ -212,7 +240,7 @@ function Sync-Visibility {
     $show = $false
     if ($fpid -eq $PID) { $show = $true }
     else { try { $pn = (Get-Process -Id $fpid -ErrorAction Stop).ProcessName; if ($pn -eq 'Code' -or $pn -eq 'Code - Insiders') { $show = $true } } catch { } }
-    if ($show) { if (-not $form.Visible) { $form.Show(); Update-Bar }; $form.TopMost = $true }
+    if ($show) { if (-not $form.Visible) { $form.Show(); Start-BgUpdate }; $form.TopMost = $true }
     else       { if ($form.Visible) { $form.Hide() } }
 }
 
@@ -230,15 +258,30 @@ $timer.Add_Tick({
     $script:tick++
     try {
         $lw = (Get-Item $mainCfgPath -ErrorAction Stop).LastWriteTimeUtc
-        if ($lw -ne $script:lastWrite) { $script:lastWrite = $lw; Update-Bar; return }  # re-calage instantane sur l'officiel
+        if ($lw -ne $script:lastWrite) { $script:lastWrite = $lw; Start-BgUpdate; return }  # re-calage instantane sur l'officiel
     } catch { }
-    if ($script:tick % 4 -eq 0) { Update-Bar }   # estimation "live" (conso locale) toutes les 4 s
+    if ($script:tick % 4 -eq 0) { Start-BgUpdate }   # estimation "live" (conso locale) toutes les 4 s
 })
 $timer.Start()
 
 $visTimer = New-Object System.Windows.Forms.Timer
 $visTimer.Interval = 500
 $visTimer.Add_Tick({ Sync-Visibility }); $visTimer.Start()
+
+# Sondage du calcul en arriere-plan : recupere le resultat des qu'il est pret,
+# sans jamais attendre/bloquer (IsCompleted est instantane a lire).
+$pollTimer = New-Object System.Windows.Forms.Timer
+$pollTimer.Interval = 200
+$pollTimer.Add_Tick({
+    if ($script:bgHandle -and $script:bgHandle.IsCompleted) {
+        try {
+            $result = $script:bgPs.EndInvoke($script:bgHandle)
+            if ($result) { Apply-Usage $result[0] }
+        } catch { }
+        finally { $script:bgPs.Dispose(); $script:bgPs = $null; $script:bgHandle = $null }
+    }
+})
+$pollTimer.Start()
 
 # Survol FIABLE : on surveille la position de la souris (plus de blocage).
 # INSTANTANE : on ne relance PAS Get-TokenUsage (lecture des .jsonl, couteux)
@@ -262,7 +305,8 @@ $hoverTimer.Add_Tick({
 $hoverTimer.Start()
 
 # --- Go ! -------------------------------------------------------------------
-Update-Bar
+Update-Bar   # premier affichage : seul appel synchrone, une fois, au demarrage
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $form.Add_Shown({ Sync-Visibility })
+$form.Add_FormClosed({ try { $script:bgPs.Dispose() } catch {}; try { $script:bgRunspace.Close(); $script:bgRunspace.Dispose() } catch {} })
 [System.Windows.Forms.Application]::Run($form)
