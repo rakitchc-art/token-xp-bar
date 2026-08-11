@@ -114,7 +114,7 @@ $panel.GetType().GetProperty('DoubleBuffered',
 
 $script:ratio           = 0.0
 $script:pctText         = '0%'
-$script:resetText       = 'reset ?'
+$script:resetText       = '?'
 $script:weeklyText      = ''
 $script:hover           = $false
 $script:lastResetTime   = $null
@@ -176,11 +176,11 @@ $panel.Add_Paint({
 
 # --- Recalcul ---------------------------------------------------------------
 function Format-Reset($resetUtc) {
-    if (-not $resetUtc) { return 'reset ?' }
+    if (-not $resetUtc) { return '?' }
     $mins = [int]((([datetime]$resetUtc) - (Get-Date).ToUniversalTime()).TotalMinutes)
     if ($mins -lt 0) { $mins = 0 }
-    if ($mins -ge 60) { return ("reset {0}h{1:00}" -f [math]::Floor($mins/60), ($mins%60)) }
-    return ("reset {0} min" -f $mins)
+    if ($mins -ge 60) { return ("{0}h{1:00}" -f [math]::Floor($mins/60), ($mins%60)) }
+    return ("{0} min" -f $mins)
 }
 function Apply-Usage($u) {
     $script:ratio           = [double]$u.Ratio
