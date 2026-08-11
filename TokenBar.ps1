@@ -69,6 +69,13 @@ $TXTFLAGS = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor `
 # Coeur pixel 8-bit : 0=vide 1=noir 2=rouge 3=blanc (reflet)
 $HEART = @('011000110','122101221','132222221','132222221','012222210','001222100','000121000','000010000')
 
+# Geometrie de la barre (partagee entre le dessin et la detection de survol,
+# pour que la zone survolable corresponde exactement a la forme visible).
+$script:BX = 24.0; $script:BH = 12.0; $script:BY = ([single]$H - $script:BH) / 2
+$script:BW = [single]$W - 24.0 - 44.0; $script:RAD = $script:BH / 2
+$script:HeartRect = New-Object System.Drawing.Rectangle 2, 2, 18, 16
+$script:PctRect    = New-Object System.Drawing.Rectangle ([int]($W - 44)), 0, 42, $H
+
 function New-RoundedPath([single]$x,[single]$y,[single]$w,[single]$h,[single]$r) {
     $d = $r*2; if ($d -gt $h) { $d = $h }; if ($d -gt $w) { $d = $w }
     $p = New-Object System.Drawing.Drawing2D.GraphicsPath
@@ -129,7 +136,7 @@ $panel.Add_Paint({
 
     Write-PixelHeart $g 2 2 2                    # coeur pixel a gauche
 
-    $bx=24.0; $bh=12.0; $by=([single]$H-$bh)/2; $bw=[single]$W-24.0-44.0; $rad=$bh/2
+    $bx=$script:BX; $by=$script:BY; $bw=$script:BW; $bh=$script:BH; $rad=$script:RAD
     $outer = New-RoundedPath $bx $by $bw $bh $rad
     $tb = New-Object System.Drawing.Drawing2D.LinearGradientBrush (New-Object System.Drawing.RectangleF $bx,$by,$bw,$bh),([System.Drawing.Color]::FromArgb(118,118,124)),([System.Drawing.Color]::FromArgb(94,94,100)),90.0
     $g.FillPath($tb,$outer); $tb.Dispose()
@@ -173,6 +180,18 @@ $panel.Add_Paint({
     }
     $ol.Dispose(); $outer.Dispose(); $font.Dispose()
 })
+
+# --- Detection de survol PRECISE : uniquement sur la forme visible (coeur,
+#     pilule arrondie, texte %), pas sur tout le rectangle de la fenetre
+#     (qui inclut des marges/coins transparents plus larges que la barre).
+function Test-OverBar([System.Drawing.Point]$pt) {
+    if ($script:HeartRect.Contains($pt)) { return $true }
+    if ($script:PctRect.Contains($pt))   { return $true }
+    $path = New-RoundedPath $script:BX $script:BY $script:BW $script:BH $script:RAD
+    $over = $path.IsVisible($pt)
+    $path.Dispose()
+    return $over
+}
 
 # --- Recalcul ---------------------------------------------------------------
 function Format-Reset($resetUtc) {
@@ -291,7 +310,8 @@ $pollTimer.Start()
 $hoverTimer = New-Object System.Windows.Forms.Timer
 $hoverTimer.Interval = 150
 $hoverTimer.Add_Tick({
-    $over = $form.Bounds.Contains([System.Windows.Forms.Cursor]::Position)
+    $localPt = $panel.PointToClient([System.Windows.Forms.Cursor]::Position)
+    $over = Test-OverBar $localPt
     if ($over) {
         $script:resetText  = Format-Reset $script:lastResetTime
         $script:weeklyText = if ($null -ne $script:lastWeeklyRatio) { "{0:P0} sem." -f $script:lastWeeklyRatio } else { '' }
