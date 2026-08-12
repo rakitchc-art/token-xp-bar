@@ -10,6 +10,7 @@
 #
 #  Doit tourner en STA -> lance via "Start-TokenBar.vbs".
 # ============================================================================
+# TEST PASSAGE DEV -> raccourci Startup (2026-08-12)
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
