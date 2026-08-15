@@ -1,4 +1,4 @@
-# 🎮 Token XP Bar — jauge de consommation Claude
+# 🎮 TokenBar — jauge de consommation Claude
 
 Une petite **barre d'XP façon jeu vidéo** qui affiche ta consommation Claude
 (limite **« Session 5h »**) en direct, flottante en haut à droite de l'écran,
@@ -7,7 +7,26 @@ Une petite **barre d'XP façon jeu vidéo** qui affiche ta consommation Claude
 ![Aperçu de la barre](preview.png)
 
 La jauge se remplit du **vert** (0 %) au **rouge** (100 %), avec le pourcentage
-à droite. Au **survol**, elle affiche le temps restant avant la remise à zéro.
+à droite. Au **survol**, elle affiche le temps restant avant la remise à zéro
+et ta consommation hebdomadaire.
+
+---
+
+## 📥 Installation (Windows) — un seul fichier
+
+1. **[Télécharge `TokenBar-Installer.bat`](../../releases/latest)** (dernière version).
+2. **Double-clique dessus.**
+3. Si Windows affiche un écran bleu *« Windows a protégé votre ordinateur »* :
+   **Informations complémentaires → Exécuter quand même**
+   *(normal pour un fichier venu d'internet — il est sain, le code est juste
+   au-dessus dans ce dépôt).*
+4. C'est tout : la barre se lance immédiatement, une icône est posée sur ton
+   Bureau, et elle redémarrera automatiquement avec Windows. Ouvre VS Code
+   pour la voir apparaître en haut à droite. ✅
+
+Pas de ZIP à extraire, pas de dossier à fouiller : un fichier, un double-clic.
+Pour désinstaller, télécharge et double-clique sur `Desinstaller.bat`
+(même dépôt, [Releases](../../releases/latest)).
 
 ---
 
@@ -17,24 +36,12 @@ La jauge se remplit du **vert** (0 %) au **rouge** (100 %), avec le pourcentage
 - 📊 **Vraie donnée officielle** (identique au site claude.ai et au panneau
   « Account & Usage » de VS Code) : lue en local, aucun mot de passe demandé.
 - 👀 Visible **seulement quand VS Code est actif** (disparaît quand tu changes de fenêtre).
-- ⏱️ Survol → temps avant reset. Glisser → déplacer. Clic → rafraîchir. Clic droit → menu.
-- 🚀 Démarrage automatique avec Windows.
+- ⏱️ Survol → temps avant reset + conso hebdomadaire. Glisser → déplacer.
+  Clic → rafraîchir. Clic droit → menu.
+- 🚀 Démarrage automatique avec Windows + icône sur le Bureau, comme un vrai logiciel.
 - 🔌 **S'adapte tout seul à ton compte** (Pro ou Max) : aucune config, aucune limite à saisir.
-
----
-
-## 📥 Installation (Windows)
-
-1. **Télécharge le projet** : bouton vert **`Code`** → **`Download ZIP`**
-   *(ou `git clone` si tu connais).*
-2. **Extrais** le ZIP, ouvre le dossier.
-3. **Double-clique sur `Installer.bat`**.
-4. Si Windows affiche un écran bleu *« Windows a protégé votre ordinateur »* :
-   **Informations complémentaires → Exécuter quand même**
-   *(normal pour un fichier venu d'internet — il est sain).*
-5. Ouvre VS Code pour voir la barre apparaître en haut à droite. ✅
-
-Pour l'enlever : double-clique sur **`Desinstaller.bat`**.
+- 🪶 **Légère** : moins de 5 % d'un cœur CPU même en session active (cache
+  incrémental — elle ne relit jamais deux fois les mêmes données).
 
 ---
 
@@ -67,13 +74,19 @@ dès que Claude Code y écrit une nouvelle valeur.
 
 ## 🛠️ Structure
 
+Pour juste **utiliser** TokenBar, un seul fichier suffit : `TokenBar-Installer.bat`
+depuis la [dernière release](../../releases/latest). Tout ce qui suit, c'est le
+code source pour les curieux (ou pour bidouiller) :
+
 | Fichier | Rôle |
 |---|---|
 | `TokenBar.ps1` | La barre (interface graphique). |
 | `Get-TokenUsage.ps1` | Lecture de la conso officielle (+ repli local). |
 | `Start-TokenBar.vbs` | Lanceur silencieux (sans fenêtre console). |
-| `Install-Autostart.ps1` | Active/retire le démarrage automatique. |
-| `Installer.bat` / `Desinstaller.bat` | Installation / désinstallation en un double-clic. |
+| `Install-Autostart.ps1` | Active/retire le démarrage automatique + raccourcis. |
+| `TokenBar.ico` | Icône (Bureau, démarrage, fenêtre). |
+| `Installer.bat` / `Desinstaller.bat` | Installation/désinstallation depuis une copie locale du dépôt. |
+| `Build-Installer.ps1` | Génère `TokenBar-Installer.bat` (empaquette les fichiers ci-dessus en un seul, à relancer après toute modification). |
 
 ---
 

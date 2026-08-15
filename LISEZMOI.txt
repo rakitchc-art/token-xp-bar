@@ -22,20 +22,23 @@ uniquement quand VS Code est ta fenetre active.
 
 
 ────────────────────────────────────────────────────────────
-  INSTALLATION  (super simple)
+  INSTALLATION  (super simple, UN SEUL FICHIER)
 ────────────────────────────────────────────────────────────
 
-  1. Double-clique sur :  Installer.bat
+  1. Telecharge TokenBar-Installer.bat (page "Releases" du depot)
 
-  2. Si Windows affiche un avertissement bleu
+  2. Double-clique dessus.
+
+  3. Si Windows affiche un avertissement bleu
      ("Windows a protege votre ordinateur") :
        -> clique sur "Informations complementaires"
        -> puis "Executer quand meme".
      (C'est normal : le fichier vient d'internet. Il est sain.)
 
-  3. C'est tout ! Ouvre VS Code pour voir la barre apparaitre
-     en haut a droite. Elle se relancera toute seule a chaque
-     demarrage de Windows.
+  4. C'est tout ! La barre se lance tout de suite, une icone
+     est posee sur ton Bureau, et elle se relancera toute
+     seule a chaque demarrage de Windows. Ouvre VS Code pour
+     la voir apparaitre en haut a droite.
 
 
 ────────────────────────────────────────────────────────────
@@ -69,8 +72,8 @@ uniquement quand VS Code est ta fenetre active.
   DESINSTALLATION
 ────────────────────────────────────────────────────────────
 
-  Double-clique sur :  Desinstaller.bat
-  (retire le demarrage automatique)
+  Telecharge Desinstaller.bat (page "Releases" du depot) et
+  double-clique dessus. (retire le demarrage automatique)
 
 
   Fait avec ❤ par un pote — bon code !
