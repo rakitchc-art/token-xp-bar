@@ -14,7 +14,9 @@ et ta consommation hebdomadaire.
 
 ## 📥 Installation (Windows) — un seul fichier
 
-1. **[Télécharge `TokenBar-Installer.bat`](../../releases/latest)** (dernière version).
+1. **[⬇️ Télécharge TokenBar-Installer.bat](../../releases/latest/download/TokenBar-Installer.bat)**
+   — le clic lance le téléchargement directement, ce lien pointe toujours sur
+   la dernière version.
 2. **Double-clique dessus.**
 3. Si Windows affiche un écran bleu *« Windows a protégé votre ordinateur »* :
    **Informations complémentaires → Exécuter quand même**
@@ -25,8 +27,7 @@ et ta consommation hebdomadaire.
    pour la voir apparaître en haut à droite. ✅
 
 Pas de ZIP à extraire, pas de dossier à fouiller : un fichier, un double-clic.
-Pour désinstaller, télécharge et double-clique sur `Desinstaller.bat`
-(même dépôt, [Releases](../../releases/latest)).
+Pour désinstaller : **[⬇️ Télécharge Desinstaller.bat](../../releases/latest/download/Desinstaller.bat)**.
 
 ---
 
@@ -74,9 +75,9 @@ dès que Claude Code y écrit une nouvelle valeur.
 
 ## 🛠️ Structure
 
-Pour juste **utiliser** TokenBar, un seul fichier suffit : `TokenBar-Installer.bat`
-depuis la [dernière release](../../releases/latest). Tout ce qui suit, c'est le
-code source pour les curieux (ou pour bidouiller) :
+Pour juste **utiliser** TokenBar, un seul fichier suffit :
+[`TokenBar-Installer.bat`](../../releases/latest/download/TokenBar-Installer.bat).
+Tout ce qui suit, c'est le code source pour les curieux (ou pour bidouiller) :
 
 | Fichier | Rôle |
 |---|---|

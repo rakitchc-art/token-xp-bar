@@ -25,7 +25,8 @@ uniquement quand VS Code est ta fenetre active.
   INSTALLATION  (super simple, UN SEUL FICHIER)
 ────────────────────────────────────────────────────────────
 
-  1. Telecharge TokenBar-Installer.bat (page "Releases" du depot)
+  1. Telecharge TokenBar-Installer.bat :
+     https://github.com/rakitchc-art/token-xp-bar/releases/latest/download/TokenBar-Installer.bat
 
   2. Double-clique dessus.
 
@@ -48,7 +49,8 @@ uniquement quand VS Code est ta fenetre active.
   - La jauge se remplit du VERT (0%) au ROUGE (100%).
   - Le pourcentage est affiche a droite.
   - SURVOLE la barre avec la souris -> elle montre le temps
-    restant avant la remise a zero ("reset").
+    restant avant la remise a zero, et ta consommation de la
+    semaine.
   - GLISSE la barre pour la deplacer ou tu veux.
   - CLIC DROIT dessus -> menu (Actualiser / Fermer).
 
@@ -72,8 +74,9 @@ uniquement quand VS Code est ta fenetre active.
   DESINSTALLATION
 ────────────────────────────────────────────────────────────
 
-  Telecharge Desinstaller.bat (page "Releases" du depot) et
-  double-clique dessus. (retire le demarrage automatique)
+  Telecharge Desinstaller.bat et double-clique dessus (retire
+  le demarrage automatique) :
+  https://github.com/rakitchc-art/token-xp-bar/releases/latest/download/Desinstaller.bat
 
 
   Fait avec ❤ par un pote — bon code !
