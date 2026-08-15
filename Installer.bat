@@ -17,6 +17,7 @@ copy /Y "%~dp0Get-TokenUsage.ps1"    "%DEST%\" >nul
 copy /Y "%~dp0TokenBar.ps1"          "%DEST%\" >nul
 copy /Y "%~dp0Start-TokenBar.vbs"    "%DEST%\" >nul
 copy /Y "%~dp0Install-Autostart.ps1" "%DEST%\" >nul
+copy /Y "%~dp0TokenBar.ico"          "%DEST%\" >nul
 rem  config.json (position de la barre) est recree tout seul au 1er lancement.
 
 echo   Activation du demarrage automatique...
@@ -34,6 +35,7 @@ echo   - La barre se lancera toute seule avec Windows.
 echo   - Elle apparait EN HAUT A DROITE quand VS Code
 echo     est la fenetre active.
 echo   - Ouvre VS Code (avec Claude Code) pour la voir.
+echo   - Un raccourci "TokenBar" a ete pose sur le Bureau.
 echo.
 echo   IMPORTANT : il faut avoir Claude Code installe et etre
 echo   connecte (commande "claude" puis /login). La barre lit

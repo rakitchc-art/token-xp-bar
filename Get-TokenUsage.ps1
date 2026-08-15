@@ -50,6 +50,90 @@ function Save-CalState {
            ConvertTo-Json -Compress) | Out-File $script:calStatePath -Encoding utf8 } catch { }
 }
 
+# --- Cache incremental des .jsonl --------------------------------------------
+# Ces fichiers ne font que grossir (des dizaines de Mo par session active) et
+# Get-TokenUsage est appele toutes les 4 s. Relire tout le fichier a chaque
+# appel, c'est relire les MEMES megaoctets des centaines de fois par heure
+# (mesure : 76% d'un coeur en continu). Le runspace d'arriere-plan de
+# TokenBar.ps1 vit en permanence -> on garde en $script: l'offset deja lu et
+# les lignes deja parsees par fichier, et on ne relit que ce qui a ete AJOUTE.
+#
+# Piege evite (1) - ligne en cours d'ecriture : si le fichier est en train
+# d'etre ecrit, la derniere ligne lue peut etre incomplete (pas encore de saut
+# de ligne final). On ne fait jamais avancer l'offset au-dela du dernier "\n"
+# vu -> la ligne partielle sera relue au prochain appel une fois complete.
+#
+# Piege evite (2) - vrai JSON, pas de la regex sur texte brut : une regex du
+# style "output_tokens":(\d+) peut matcher n'importe ou dans la ligne, y
+# compris DANS un message qui ne fait que CITER un exemple de JSON d'usage
+# (ce projet parle constamment de tokens/usage -> risque de comptage bidon).
+# On parse chaque nouvelle ligne avec ConvertFrom-Json et on ne retient que
+# .message.usage, la vraie structure ecrite par Claude Code.
+#
+# Piege evite (3) - une ligne corrompue ne doit jamais bloquer les suivantes :
+# le try/catch est PAR LIGNE, pas autour de tout le lot. Sans ca, une seule
+# ligne illisible ferait echouer tout le bloc AVANT la mise a jour de
+# l'offset -> l'offset resterait coince pour toujours sur ce fichier, et plus
+# aucune ligne suivante ne serait jamais comptee (echec silencieux permanent).
+$script:jsonlCache = @{}   # chemin -> @{ Offset; LastWriteUtc; Entries: List<{T,In,Out,Cc,Cr}> }
+
+function Get-JsonlEntries($file) {
+    $path = $file.FullName
+    $entry = $script:jsonlCache[$path]
+    if (-not $entry) {
+        $entry = [pscustomobject]@{ Offset = [long]0; LastWriteUtc = $file.LastWriteTimeUtc; Entries = [System.Collections.Generic.List[object]]::new() }
+        $script:jsonlCache[$path] = $entry
+    }
+    $entry.LastWriteUtc = $file.LastWriteTimeUtc
+    $len = $file.Length
+    if ($len -lt $entry.Offset) { $entry.Offset = 0; $entry.Entries.Clear() }   # fichier tronque/recree
+    if ($len -gt $entry.Offset) {
+        try {
+            $fs = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite,Delete')
+            try {
+                $toRead = [int]($len - $entry.Offset)
+                $fs.Seek($entry.Offset, [System.IO.SeekOrigin]::Begin) | Out-Null
+                $buf = New-Object byte[] $toRead
+                $read = $fs.Read($buf, 0, $toRead)
+                if ($read -gt 0) {
+                    # BOM eventuel en tout debut de fichier (byte 0) : compte a part
+                    # dans l'offset, sinon le decalage se desynchronise de 3 octets.
+                    $bomLen = 0
+                    if ($entry.Offset -eq 0 -and $read -ge 3 -and $buf[0] -eq 0xEF -and $buf[1] -eq 0xBB -and $buf[2] -eq 0xBF) { $bomLen = 3 }
+                    $text = [System.Text.Encoding]::UTF8.GetString($buf, $bomLen, $read - $bomLen)
+                    $lastNL = $text.LastIndexOf("`n")
+                    if ($lastNL -ge 0) {
+                        $consumable = $text.Substring(0, $lastNL + 1)
+                        foreach ($line in ($consumable -split "`n")) {
+                            if (-not $line -or $line -notlike '*"usage"*') { continue }
+                            try {
+                                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                                $usage = $obj.message.usage
+                                if (-not $usage -or $null -eq $usage.output_tokens -or -not $obj.timestamp) { continue }
+                                $entry.Entries.Add([pscustomobject]@{
+                                    T   = ([datetime]::Parse($obj.timestamp)).ToUniversalTime()
+                                    In  = if ($usage.input_tokens) { [double]$usage.input_tokens } else { 0.0 }
+                                    Out = [double]$usage.output_tokens
+                                    Cc  = if ($usage.cache_creation_input_tokens) { [double]$usage.cache_creation_input_tokens } else { 0.0 }
+                                    Cr  = if ($usage.cache_read_input_tokens) { [double]$usage.cache_read_input_tokens } else { 0.0 }
+                                })
+                            } catch { }   # ligne corrompue/non pertinente : ignoree, n'empeche pas les suivantes
+                        }
+                        $entry.Offset += $bomLen + [System.Text.Encoding]::UTF8.GetByteCount($consumable)
+                    }
+                }
+            } finally { $fs.Dispose() }
+        } catch { }
+    }
+    return $entry.Entries
+}
+
+function Prune-JsonlCache($cutoffUtc) {
+    if ($script:jsonlCache.Count -eq 0) { return }
+    $stale = @($script:jsonlCache.Keys | Where-Object { $script:jsonlCache[$_].LastWriteUtc -lt $cutoffUtc })
+    foreach ($k in $stale) { $script:jsonlCache.Remove($k) }
+}
+
 function Get-TokenUsage {
     # LiveFactor : reglage fin de l'estimation live (1 = neutre). Avec l'auto-
     # calibrage, 1.0 devrait etre juste ; baisse/monte seulement si besoin.
@@ -86,6 +170,10 @@ function Get-TokenUsage {
             if ($cu -and $cu.utilization -and $cu.utilization.five_hour) {
                 $fh = $cu.utilization.five_hour
                 $sd = $cu.utilization.seven_day
+                # ---- % hebdomadaire GENERAL (celui affiche par l'appli officielle,
+                #      "Weekly (7 day)") -- pas les plafonds scopes par modele
+                #      (ex. Fable), qui sont un compteur different et plus specifique.
+                $weeklyPct = if ($sd) { [double]$sd.utilization } else { $null }
                 $officialPct = [double]$fh.utilization
                 $reset5 = if ($fh.resets_at) { ([datetime]$fh.resets_at).ToUniversalTime() } else { $null }
                 $Ta = if ($cu.fetchedAtMs) { [System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$cu.fetchedAtMs).UtcDateTime } else { $null }
@@ -102,27 +190,15 @@ function Get-TokenUsage {
                     $inA=0.0; $outA=0.0; $ccA=0.0; $crA=0.0
                     $firstT = $null
                     $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
+                    Prune-JsonlCache $windowStart
                     $files = Get-ChildItem $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue |
                              Where-Object { $_.LastWriteTimeUtc -ge $windowStart }
                     foreach ($file in $files) {
-                        foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
-                            if ($line -notlike '*"usage"*') { continue }
-                            $mo = [regex]::Match($line, '"output_tokens":(\d+)')
-                            if (-not $mo.Success) { continue }
-                            $mt = [regex]::Match($line, '"timestamp":"([^"]+)"')
-                            if (-not $mt.Success) { continue }
-                            $t = ([datetime]::Parse($mt.Groups[1].Value)).ToUniversalTime()
-                            if ($t -lt $windowStart) { continue }
-                            $mi = [regex]::Match($line, '"input_tokens":(\d+)')
-                            $mc = [regex]::Match($line, '"cache_creation_input_tokens":(\d+)')
-                            $mr = [regex]::Match($line, '"cache_read_input_tokens":(\d+)')
-                            $vOut = [double]$mo.Groups[1].Value
-                            $vIn  = if ($mi.Success) { [double]$mi.Groups[1].Value } else { 0.0 }
-                            $vCc  = if ($mc.Success) { [double]$mc.Groups[1].Value } else { 0.0 }
-                            $vCr  = if ($mr.Success) { [double]$mr.Groups[1].Value } else { 0.0 }
-                            $inN += $vIn; $outN += $vOut; $ccN += $vCc; $crN += $vCr
-                            if ($null -eq $firstT -or $t -lt $firstT) { $firstT = $t }
-                            if ($t -le $Ta) { $inA += $vIn; $outA += $vOut; $ccA += $vCc; $crA += $vCr }
+                        foreach ($e in (Get-JsonlEntries $file)) {
+                            if ($e.T -lt $windowStart) { continue }
+                            $inN += $e.In; $outN += $e.Out; $ccN += $e.Cc; $crN += $e.Cr
+                            if ($null -eq $firstT -or $e.T -lt $firstT) { $firstT = $e.T }
+                            if ($e.T -le $Ta) { $inA += $e.In; $outA += $e.Out; $ccA += $e.Cc; $crA += $e.Cr }
                         }
                     }
 
@@ -151,7 +227,7 @@ function Get-TokenUsage {
                             Ratio         = [math]::Max(0.0, [math]::Min(1.0, $dispPct / 100.0))
                             OfficialRatio = $null
                             ResetTime     = $newReset
-                            WeeklyRatio   = if ($sd) { [math]::Max(0.0, [math]::Min(1.0, [double]$sd.utilization / 100.0)) } else { $null }
+                            WeeklyRatio   = if ($null -ne $weeklyPct) { [math]::Max(0.0, [math]::Min(1.0, $weeklyPct / 100.0)) } else { $null }
                             TokensPerPct  = $null
                             FetchedAgeSec = if ($cu.fetchedAtMs) { [int](([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 1000) } else { $null }
                         }
@@ -201,7 +277,7 @@ function Get-TokenUsage {
                     Ratio         = [math]::Max(0.0, [math]::Min(1.0, $dispPct / 100.0))
                     OfficialRatio = [math]::Max(0.0, [math]::Min(1.0, $officialPct / 100.0))
                     ResetTime     = $reset5
-                    WeeklyRatio   = if ($sd) { [math]::Max(0.0, [math]::Min(1.0, [double]$sd.utilization / 100.0)) } else { $null }
+                    WeeklyRatio   = if ($null -ne $weeklyPct) { [math]::Max(0.0, [math]::Min(1.0, $weeklyPct / 100.0)) } else { $null }
                     TokensPerPct  = $null
                     FetchedAgeSec = if ($cu.fetchedAtMs) { [int](([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [long]$cu.fetchedAtMs) / 1000) } else { $null }
                 }
@@ -214,14 +290,10 @@ function Get-TokenUsage {
     $files = Get-ChildItem -Path $projectsDir -Recurse -Filter *.jsonl -ErrorAction SilentlyContinue
     $events = New-Object System.Collections.Generic.List[object]
     foreach ($file in $files) {
-        foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
-            if ($line -notlike '*"usage"*') { continue }
-            try { $obj = $line | ConvertFrom-Json } catch { continue }
-            $usage = $obj.message.usage
-            if ($null -eq $usage -or $null -eq $obj.timestamp) { continue }
+        foreach ($e in (Get-JsonlEntries $file)) {
             # Contribution en POINTS de % (memes poids calibres que la formule principale).
-            $tokens = (([double]$usage.input_tokens + [double]$usage.output_tokens) * 88.996 + [double]$usage.cache_creation_input_tokens * 11.1857 + [double]$usage.cache_read_input_tokens * 0.15563) / 1e6
-            $events.Add([pscustomobject]@{ Time = [datetime]::Parse($obj.timestamp).ToUniversalTime(); Tokens = $tokens })
+            $tokens = (($e.In + $e.Out) * 88.996 + $e.Cc * 11.1857 + $e.Cr * 0.15563) / 1e6
+            $events.Add([pscustomobject]@{ Time = $e.T; Tokens = $tokens })
         }
     }
     $now = (Get-Date).ToUniversalTime()

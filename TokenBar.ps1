@@ -10,7 +10,6 @@
 #
 #  Doit tourner en STA -> lance via "Start-TokenBar.vbs".
 # ============================================================================
-# TEST PASSAGE DEV -> raccourci Startup (2026-08-12)
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -37,10 +36,11 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 . (Join-Path $scriptDir 'Get-TokenUsage.ps1')
 
 # --- Calcul en ARRIERE-PLAN ---------------------------------------------------
-# Get-TokenUsage relit tous les .jsonl de la fenetre de 5h (potentiellement gros
-# et de plus en plus lent au fil d'une session active) : l'executer directement
-# sur le thread de l'UI FIGEAIT la fenetre (deplacement saccade, survol qui
-# traine). On le lance dans un runspace separe, sans jamais bloquer l'UI.
+# Get-TokenUsage lit les .jsonl de la fenetre de 5h (cache incremental cote
+# fichier -> ne relit que ce qui a ete ajoute depuis le dernier appel) : meme
+# ainsi, l'executer directement sur le thread de l'UI FIGEAIT la fenetre
+# (deplacement saccade, survol qui traine). On le lance dans un runspace
+# separe, sans jamais bloquer l'UI.
 $script:bgRunspace = [runspacefactory]::CreateRunspace()
 $script:bgRunspace.Open()
 $bgInit = [powershell]::Create()
@@ -53,7 +53,7 @@ $script:bgHandle = $null
 
 # --- Configuration ----------------------------------------------------------
 $configPath = Join-Path $scriptDir 'config.json'
-$config = [pscustomobject]@{ RefreshSeconds = 10; PosRight = -1; PosY = 12; LiveFactor = 1.0 }
+$config = [pscustomobject]@{ PosRight = -1; PosY = 12; LiveFactor = 1.0 }
 if (Test-Path $configPath) {
     try { $s = Get-Content $configPath -Raw | ConvertFrom-Json
           foreach ($p in $s.PSObject.Properties) { $config.$($p.Name) = $p.Value } } catch { }
@@ -108,6 +108,8 @@ $form.Size            = New-Object System.Drawing.Size($W, $H)
 $form.BackColor       = $KEY
 $form.TransparencyKey = $KEY
 $form.StartPosition   = 'Manual'
+$icoPath = Join-Path $scriptDir 'TokenBar.ico'
+if (Test-Path $icoPath) { try { $form.Icon = New-Object System.Drawing.Icon $icoPath } catch { } }
 
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 $posRight = if ($config.PosRight -lt 0) { $screen.Right - 12 } else { [int]$config.PosRight }
@@ -121,7 +123,7 @@ $panel.GetType().GetProperty('DoubleBuffered',
 ).SetValue($panel, $true, $null)
 
 $script:ratio           = 0.0
-$script:pctText         = '0%'
+$script:pctText         = '···'
 $script:resetText       = '?'
 $script:weeklyText      = ''
 $script:hover           = $false
@@ -210,10 +212,6 @@ function Apply-Usage($u) {
     $script:resetText       = Format-Reset $u.ResetTime
     $script:weeklyText      = if ($null -ne $u.WeeklyRatio) { "{0:P0} sem." -f $u.WeeklyRatio } else { '' }
     $panel.Invalidate()
-}
-function Update-Bar {
-    # Calcul SYNCHRONE : uniquement pour le tout premier affichage au demarrage.
-    Apply-Usage (Get-TokenUsage -LiveFactor $config.LiveFactor)
 }
 function Start-BgUpdate {
     # Calcul ASYNCHRONE (thread separe) : ne bloque jamais l'UI. Si un calcul
@@ -326,7 +324,10 @@ $hoverTimer.Add_Tick({
 $hoverTimer.Start()
 
 # --- Go ! -------------------------------------------------------------------
-Update-Bar   # premier affichage : seul appel synchrone, une fois, au demarrage
+# Meme le premier calcul part en arriere-plan (cache froid = jusqu'a plusieurs
+# secondes de lecture) : la fenetre s'affiche tout de suite avec "..." et se
+# met a jour des que le resultat arrive (pollTimer), sans jamais geler l'UI.
+Start-BgUpdate
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $form.Add_Shown({ Sync-Visibility })
 $form.Add_FormClosed({ try { $script:bgPs.Dispose() } catch {}; try { $script:bgRunspace.Close(); $script:bgRunspace.Dispose() } catch {} })
