@@ -36,9 +36,12 @@ message explicite — même mécanique que SSH. Si un jour tu vois
 réinstallé (alors clique **Oublier** puis reconfigure), soit que quelqu'un
 s'interpose.
 
-Une fois enregistré, un **petit pion** apparaît sous le pourcentage. Un clic
-dessus ouvre la partie. Une **pastille rouge** s'allume sur le pion quand c'est
-à toi de jouer.
+Une fois enregistré, une **petite flèche** apparaît sous le pourcentage. Un
+clic déplie le plateau juste sous la barre, un autre le replie. Une **pastille
+rouge** s'allume sur la flèche quand c'est à toi de jouer.
+
+Il n'y a **aucune fenêtre séparée** : rien dans la barre des tâches, rien qui
+vole le premier plan, et aucun temps d'ouverture.
 
 ---
 
@@ -46,19 +49,43 @@ dessus ouvre la partie. Une **pastille rouge** s'allume sur le pion quand c'est
 
 - **Clic** sur une de tes pièces : les cases où elle peut aller s'affichent
   (un disque sur une case vide, un anneau autour d'une pièce à prendre).
-- **Clic** sur une de ces cases : le coup est joué et envoyé.
+- **Clic** sur une de ces cases : le coup est joué. Il s'affiche
+  **immédiatement** ; l'envoi au serveur part ensuite, en arrière-plan. Une
+  connexion lente ne fige donc jamais le plateau.
 - **Promotion** : quand un pion atteint la dernière rangée, les quatre pièces
   possibles s'empilent sur la case ; tu cliques celle que tu veux.
-- La fenêtre **s'agrandit librement** : plateau, pièces, texte et boutons
-  grandissent ensemble.
+- **Agrandir** : la poignée en bas à gauche du plateau se tire à la souris.
+  Vers la gauche et vers le bas pour agrandir — le plateau grandit de ce
+  côté-là parce que la barre reste collée au bord droit de l'écran. La taille
+  choisie est retenue.
 - Le dernier coup de l'adversaire reste **surligné en jaune** — pratique quand
   on revient plusieurs heures après.
 - Le roi en échec est entouré d'un **halo rouge**.
+- **Clic droit sur le plateau** : retourner le plateau, nouvelle partie,
+  abandonner, revenir aux réglages de connexion.
 
 Les coups illégaux sont impossibles : le moteur est vérifié par 20 compteurs
 perft de référence, dont 197 281 positions à quatre coups de profondeur.
 
-Quand une partie se termine, le bouton **Nouvelle partie** en relance une, et
+### Le code couleur du cadre
+
+Le plateau ne porte aucun texte : c'est la **couleur du cadre** qui dit où en
+est la partie.
+
+| Couleur du cadre | Ce que ça veut dire |
+|---|---|
+| gris très sombre | rien à signaler, c'est à l'adversaire de jouer |
+| ambre | **c'est à toi** |
+| orange | **échec** |
+| vert, avec un liseré clair | tu as gagné |
+| rouge, avec un liseré clair | tu as perdu |
+| bleu-gris, avec un liseré clair | partie nulle |
+
+Les trois états de fin de partie ont en plus un **liseré clair à l'intérieur** :
+une information portée par la seule couleur serait invisible pour qui distingue
+mal le rouge du vert.
+
+Quand une partie se termine, **clic droit → Nouvelle partie** en relance une, et
 les couleurs s'échangent automatiquement. Le score cumulé suit la règle
 classique : victoire 1 point, nulle ½, défaite 0.
 

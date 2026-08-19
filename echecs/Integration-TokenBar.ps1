@@ -1,76 +1,34 @@
 ﻿# ============================================================================
 #  Integration-TokenBar.ps1 — l'easter egg.
 #
-#  Tant qu'aucun serveur n'est enregistré, ce fichier ne fait strictement
-#  rien de visible : la barre est identique à ce qu'elle a toujours été. Le
-#  jeu ne se révèle qu'après un geste caché — Ctrl + Maj + double-clic sur le
-#  cœur — qui ouvre le seul endroit où saisir une adresse de serveur.
+#  Tant qu'aucun serveur n'est enregistré, ce fichier ne fait rien de visible :
+#  la barre est identique à ce qu'elle a toujours été. Le jeu ne se révèle
+#  qu'après un geste caché — Ctrl + Maj + double-clic sur le cœur — qui ouvre
+#  le seul endroit où saisir une adresse de serveur.
 #
-#  Une fois un serveur enregistré, un petit pion en pixels s'affiche sous le
-#  pourcentage. Un clic ouvre la partie ; une pastille rouge apparaît dessus
-#  quand c'est à toi de jouer.
+#  Ensuite, une petite flèche s'affiche sous le pourcentage. Un clic déplie le
+#  plateau sous la barre, un autre le replie. Aucune fenêtre séparée : rien
+#  dans la barre des tâches, rien qui vole le premier plan, aucun délai
+#  d'ouverture.
 #
-#  RAPPEL DE PORTÉE (voir Fenetre-Echecs.ps1) : dans un bloc créé avec
-#  .GetNewClosure(), toute variable $script: vaut $null. Les fermetures de ce
-#  fichier ne manipulent donc que des variables locales et des appels de
-#  fonction — jamais $script:quelquechose.
+#  RÈGLE DU RÉSEAU, valable partout ici : l'interface n'attend JAMAIS le
+#  serveur. Un coup joué s'affiche immédiatement et part ensuite dans un fil
+#  séparé. Sur une connexion lente, l'ancienne version figeait la fenêtre
+#  pendant tout l'aller-retour.
+#
+#  RAPPEL DE PORTÉE : dans un bloc créé avec .GetNewClosure(), toute variable
+#  $script: vaut $null. Les fermetures d'ici ne manipulent que des variables
+#  locales et des appels de fonction.
 # ============================================================================
 
-# Chargé ici, au niveau du script, et non à la demande dans une fonction :
-# un « . fichier.ps1 » exécuté dans une fonction définit ses fonctions dans
-# la portée de cette fonction, qui disparaît au retour. Le chargement paraît
-# réussir et tout casse au premier appel.
+# Chargé au niveau du script, jamais dans une fonction : un « . fichier.ps1 »
+# exécuté dans une fonction y définit ses fonctions, qui disparaissent au
+# retour. Le chargement paraît réussir et tout casse au premier appel.
 . (Join-Path $PSScriptRoot 'Moteur-Echecs.ps1')
 . (Join-Path $PSScriptRoot 'Rendu-Echiquier.ps1')
 . (Join-Path $PSScriptRoot 'Partie-Echecs.ps1')
 . (Join-Path $PSScriptRoot 'Client-Serveur.ps1')
-. (Join-Path $PSScriptRoot 'Fenetre-Echecs.ps1')
-
-# ---------------------------------------------------------------------------
-#  Le pion en pixels — même famille graphique que le cœur de la barre.
-#  0 = rien, 1 = contour sombre, 2 = corps clair.
-# ---------------------------------------------------------------------------
-
-$script:PION_PIXEL = @(
-    '000111000',
-    '001222100',
-    '001222100',
-    '000121000',
-    '001222100',
-    '012222210',
-    '122222221',
-    '111111111')
-
-function Write-PixelPion {
-    # Dessiné sans lissage, comme le cœur : le fond de la barre est une
-    # couleur de transparence, et un bord adouci y laisserait un halo gris.
-    param($G, [single]$OX, [single]$OY, [single]$Cell, [bool]$Pastille)
-
-    $ancien = $G.SmoothingMode
-    $G.SmoothingMode = 'None'
-    $sombre = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(14, 14, 16))
-    $clair  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(238, 238, 238))
-
-    for ($r = 0; $r -lt $script:PION_PIXEL.Count; $r++) {
-        $ligne = $script:PION_PIXEL[$r]
-        for ($c = 0; $c -lt $ligne.Length; $c++) {
-            $ch = $ligne[$c]
-            if ($ch -eq '0') { continue }
-            $b = $(if ($ch -eq '1') { $sombre } else { $clair })
-            $G.FillRectangle($b, ($OX + $c * $Cell), ($OY + $r * $Cell), $Cell, $Cell)
-        }
-    }
-
-    if ($Pastille) {
-        $rouge = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(240, 45, 50))
-        $G.FillRectangle($sombre, ($OX + 6 * $Cell), $OY, (3 * $Cell), (3 * $Cell))
-        $G.FillRectangle($rouge,  ($OX + 6.5 * $Cell), ($OY + 0.5 * $Cell), (2 * $Cell), (2 * $Cell))
-        $rouge.Dispose()
-    }
-
-    $sombre.Dispose(); $clair.Dispose()
-    $G.SmoothingMode = $ancien
-}
+. (Join-Path $PSScriptRoot 'Plateau-Barre.ps1')
 
 # ---------------------------------------------------------------------------
 #  Configuration
@@ -81,6 +39,46 @@ function Test-EchecsConfigure {
     return ([string]$Config.EchecsAdresse -ne '' -and
             [string]$Config.EchecsCode    -ne '' -and
             [string]$Config.EchecsNom     -ne '')
+}
+
+function Invoke-EssaiConnexion {
+    # Un essai depuis le dialogue. $Etat porte l'empreinte déjà connue et se
+    # met à jour avec celle qu'on vient de voir.
+    #
+    # Règle d'épinglage : on n'accepte un certificat inconnu QUE si aucune
+    # empreinte n'est enregistrée pour cette adresse. Changer d'adresse remet
+    # le compteur à zéro ; un certificat qui change sur la MÊME adresse est
+    # refusé — c'est tout l'intérêt.
+    param([string]$Nom, [string]$Adresse, [string]$Code, $Etat)
+
+    $memeServeur = ((ConvertTo-AdresseServeur $Adresse) -eq (ConvertTo-AdresseServeur $Etat.AdresseConnue))
+    $empreinte = $(if ($memeServeur) { [string]$Etat.EmpreinteConnue } else { '' })
+
+    if ($empreinte) {
+        $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $Nom `
+                                  -Route '/etat' -Delai 8 -Empreinte $empreinte
+    } else {
+        $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $Nom `
+                                  -Route '/etat' -Delai 8 -AutoriserPremiere
+    }
+
+    if ($r.Ok -and $r.EmpreinteVue) {
+        $Etat.EmpreinteConnue = [string]$r.EmpreinteVue
+        $Etat.AdresseConnue   = $Adresse
+    }
+    return $r
+}
+
+function Write-EtatConnexion {
+    param($Etiquette, $Reponse)
+    if ($Reponse.Ok) {
+        $Etiquette.ForeColor = [System.Drawing.Color]::FromArgb(120, 200, 120)
+        $Etiquette.Text = ('Serveur joignable. Blancs : ' + $Reponse.Etat.joueurs.w +
+                           '   Noirs : ' + $Reponse.Etat.joueurs.b)
+    } else {
+        $Etiquette.ForeColor = [System.Drawing.Color]::FromArgb(226, 96, 80)
+        $Etiquette.Text = ('Echec : ' + $Reponse.Erreur)
+    }
 }
 
 function New-ChampDialogue {
@@ -102,51 +100,10 @@ function New-ChampDialogue {
     return $t
 }
 
-function Invoke-EssaiConnexion {
-    # Un essai de connexion depuis le dialogue. $Etat porte l'empreinte déjà
-    # connue et se met à jour avec celle qu'on vient de voir.
-    #
-    # La règle d'épinglage : on n'accepte un certificat inconnu QUE si aucune
-    # empreinte n'est encore enregistrée pour cette adresse. Changer d'adresse
-    # remet donc le compteur à zéro, mais un certificat qui change sur la même
-    # adresse est refusé — c'est tout l'intérêt.
-    param([string]$Nom, [string]$Adresse, [string]$Code, $Etat)
-
-    $memeServeur = ((ConvertTo-AdresseServeur $Adresse) -eq (ConvertTo-AdresseServeur $Etat.AdresseConnue))
-    $empreinte = $(if ($memeServeur) { [string]$Etat.EmpreinteConnue } else { '' })
-
-    if ($empreinte) {
-        $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $Nom `
-                                  -Route '/etat' -Delai 8 -Empreinte $empreinte
-    } else {
-        $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $Nom `
-                                  -Route '/etat' -Delai 8 -AutoriserPremiere
-    }
-
-    if ($r.Ok -and $r.EmpreinteVue) {
-        $Etat.EmpreinteConnue = [string]$r.EmpreinteVue
-        $Etat.AdresseConnue   = $Adresse
-        $Etat.Premiere        = (-not $empreinte)
-    }
-    return $r
-}
-
-function Write-EtatConnexion {
-    param($Etiquette, $Reponse)
-    if ($Reponse.Ok) {
-        $Etiquette.ForeColor = [System.Drawing.Color]::FromArgb(120, 200, 120)
-        $Etiquette.Text = ('Serveur joignable. Blancs : ' + $Reponse.Etat.joueurs.w +
-                           '   Noirs : ' + $Reponse.Etat.joueurs.b)
-    } else {
-        $Etiquette.ForeColor = [System.Drawing.Color]::FromArgb(226, 96, 80)
-        $Etiquette.Text = ('Echec : ' + $Reponse.Erreur)
-    }
-}
-
 function Show-DialogueConnexionEchecs {
-    # La seule porte d'entrée. Trois champs, un bouton pour éprouver la
-    # connexion AVANT d'enregistrer, et un bouton pour tout effacer — qui fait
-    # disparaître le jeu comme s'il n'avait jamais existé.
+    # La seule porte d'entrée. Trois champs, un essai avant d'enregistrer, et
+    # un bouton pour tout effacer — qui fait disparaître le jeu comme s'il
+    # n'avait jamais existé.
     param($Config, [string]$CheminIcone = '')
 
     $f = New-Object System.Windows.Forms.Form
@@ -159,6 +116,7 @@ function Show-DialogueConnexionEchecs {
     $f.ForeColor = [System.Drawing.Color]::FromArgb(232, 230, 225)
     $f.Font = New-Object System.Drawing.Font 'Segoe UI', 9.5
     $f.TopMost = $true
+    $f.ShowInTaskbar = $false
     if ($CheminIcone -and (Test-Path $CheminIcone)) {
         try { $f.Icon = New-Object System.Drawing.Icon $CheminIcone } catch { }
     }
@@ -177,7 +135,6 @@ function Show-DialogueConnexionEchecs {
     $bTester  = New-Object System.Windows.Forms.Button
     $bOublier = New-Object System.Windows.Forms.Button
     $bOk      = New-Object System.Windows.Forms.Button
-    $i = 0
     foreach ($paire in @(@($bTester, 'Tester', 16), @($bOublier, 'Oublier', 124), @($bOk, 'Enregistrer', 312))) {
         $b = $paire[0]
         $b.Text = $paire[1]
@@ -190,28 +147,22 @@ function Show-DialogueConnexionEchecs {
         $b.BackColor = [System.Drawing.Color]::FromArgb(58, 56, 51)
         $b.ForeColor = [System.Drawing.Color]::FromArgb(236, 234, 229)
         $f.Controls.Add($b)
-        $i++
     }
 
     $resultat = @{ Action = 'annule'; EmpreinteConnue = [string]$Config.EchecsEmpreinte
                    AdresseConnue = [string]$Config.EchecsAdresse }
 
-    # .GetNewClosure() est indispensable ici : sans lui, ces blocs ne verraient
-    # aucune des variables locales de cette fonction ($tNom, $f, $resultat...).
-    # En revanche ils ne doivent contenir QUE des appels de fonction et des
-    # locales — jamais de $script:, qui y vaudrait $null.
     $bTester.Add_Click({
         $etat.ForeColor = [System.Drawing.Color]::FromArgb(150, 148, 143)
         $etat.Text = 'Contact en cours...'
         $f.Refresh()
-        $r = Invoke-EssaiConnexion $tNom.Text $tAdresse.Text $tCode.Text $resultat
-        Write-EtatConnexion $etat $r
+        Write-EtatConnexion $etat (Invoke-EssaiConnexion $tNom.Text $tAdresse.Text $tCode.Text $resultat)
     }.GetNewClosure())
 
     $bOk.Add_Click({
-        # Enregistrer ESSAIE d'abord. Enregistrer des reglages qui ne
-        # fonctionnent pas ferait apparaitre le pion pour rien, et l'erreur ne
-        # se verrait qu'au premier clic dessus.
+        # Enregistrer ESSAIE d'abord : des réglages qui ne fonctionnent pas
+        # feraient apparaître la flèche pour rien, et l'erreur ne se verrait
+        # qu'au premier clic dessus.
         $etat.ForeColor = [System.Drawing.Color]::FromArgb(150, 148, 143)
         $etat.Text = 'Verification avant enregistrement...'
         $f.Refresh()
@@ -235,16 +186,25 @@ function Show-DialogueConnexionEchecs {
 }
 
 # ---------------------------------------------------------------------------
-#  Interrogation du serveur, sans jamais bloquer la barre
+#  Dialogue avec le serveur — toujours dans un fil séparé
+#
+#  Une seule tâche à la fois, dans une file. Les coups passent avant les
+#  interrogations d'état : sans cette priorité, un sondage arrivé entre-temps
+#  ramènerait la position d'AVANT le coup qu'on vient de jouer et l'effacerait
+#  de l'écran.
 # ---------------------------------------------------------------------------
 
 $script:echecsRunspace = $null
 $script:echecsPs       = $null
 $script:echecsHandle   = $null
+$script:echecsTacheEnCours = $null
+$script:echecsFile     = New-Object 'System.Collections.Generic.List[hashtable]'
+
 $script:echecsEtat     = $null      # dernier état reçu du serveur
 $script:echecsNom      = ''
 $script:echecsMonTour  = $false
 $script:echecsErreur   = ''
+$script:echecsPartie   = $null
 
 function Initialize-EchecsRunspace {
     param([string]$Dossier)
@@ -253,58 +213,98 @@ function Initialize-EchecsRunspace {
     $script:echecsRunspace.Open()
     $init = [powershell]::Create()
     $init.Runspace = $script:echecsRunspace
-    # Seul le client est chargé ici : savoir « est-ce mon tour ? » ne demande
-    # pas les règles du jeu, seulement la parité du nombre de coups.
+    # Seul le client est chargé ici : parler au serveur ne demande pas les
+    # règles du jeu, qui restent du côté de l'interface.
     [void]$init.AddScript({ param($d) . (Join-Path $d 'echecs\Client-Serveur.ps1') }).AddArgument($Dossier)
     $init.Invoke() | Out-Null
     $init.Dispose()
 }
 
+function Add-TacheEchecs {
+    param([string]$Route, [hashtable]$Corps = @{}, [bool]$Prioritaire = $false)
+    $t = @{ Route = $Route; Corps = $Corps }
+    if ($Prioritaire) { $script:echecsFile.Insert(0, $t) } else { $script:echecsFile.Add($t) }
+}
+
 function Start-EchecsPoll {
+    # Met une interrogation d'état en file, sauf s'il y a déjà à faire.
     param($Config, [string]$Dossier)
     if (-not (Test-EchecsConfigure $Config)) { return }
+    if ($script:echecsFile.Count -gt 0) { return }
+    Add-TacheEchecs '/etat'
+    Start-TacheSuivante $Config $Dossier
+}
+
+function Start-TacheSuivante {
+    param($Config, [string]$Dossier)
     if ($script:echecsHandle) { return }
+    if ($script:echecsFile.Count -eq 0) { return }
+    if (-not (Test-EchecsConfigure $Config)) { return }
     Initialize-EchecsRunspace $Dossier
     $script:echecsNom = [string]$Config.EchecsNom
+
+    $tache = $script:echecsFile[0]
+    $script:echecsFile.RemoveAt(0)
+    $script:echecsTacheEnCours = $tache
 
     $ps = [powershell]::Create()
     $ps.Runspace = $script:echecsRunspace
     [void]$ps.AddScript({
-        param($adresse, $code, $nom, $empreinte)
-        # Pas de -AutoriserPremiere ici : un sondage de fond ne doit JAMAIS
+        param($adresse, $code, $nom, $empreinte, $route, $corps)
+        # Pas de -AutoriserPremiere ici : un échange de fond ne doit JAMAIS
         # accepter un certificat inconnu. Seul le dialogue de connexion, où
-        # quelqu'un est devant l'écran, a ce droit.
+        # quelqu'un est devant l'écran, en a le droit.
         Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom `
-                             -Route '/etat' -Delai 7 -Empreinte $empreinte
+                             -Route $route -Corps $corps -Delai 10 -Empreinte $empreinte
     })
     [void]$ps.AddArgument([string]$Config.EchecsAdresse)
     [void]$ps.AddArgument([string]$Config.EchecsCode)
     [void]$ps.AddArgument([string]$Config.EchecsNom)
     [void]$ps.AddArgument([string]$Config.EchecsEmpreinte)
+    [void]$ps.AddArgument([string]$tache.Route)
+    [void]$ps.AddArgument([hashtable]$tache.Corps)
 
     $script:echecsPs     = $ps
     $script:echecsHandle = $ps.BeginInvoke()
 }
 
 function Complete-EchecsPoll {
-    # Renvoie $true si l'affichage doit changer.
-    if (-not $script:echecsHandle -or -not $script:echecsHandle.IsCompleted) { return $false }
+    # Ramasse le résultat quand il est prêt. Renvoie $true si l'affichage doit
+    # être redessiné.
+    param($Config, [string]$Dossier)
+    if (-not $script:echecsHandle) {
+        Start-TacheSuivante $Config $Dossier
+        return $false
+    }
+    if (-not $script:echecsHandle.IsCompleted) { return $false }
 
+    $tache = $script:echecsTacheEnCours
     $avantTour = $script:echecsMonTour
-    $avantNb = -1
-    if ($script:echecsEtat -and $script:echecsEtat.coups) { $avantNb = @($script:echecsEtat.coups).Count }
+    $redessiner = $false
 
     try {
         $res = $script:echecsPs.EndInvoke($script:echecsHandle)
         if ($res -and $res[0]) {
             $r = $res[0]
             if ($r.Ok -and $r.Etat) {
-                $script:echecsEtat    = $r.Etat
-                $script:echecsErreur  = ''
-                $script:echecsMonTour = Test-MonTourDepuisEtat $r.Etat $script:echecsNom
+                $script:echecsEtat   = $r.Etat
+                $script:echecsErreur = ''
+                $redessiner = (Sync-PartieBarre $Config)
             } else {
-                $script:echecsErreur  = [string]$r.Erreur
-                $script:echecsMonTour = $false
+                $script:echecsErreur = [string]$r.Erreur
+                # Un refus du serveur n'est pas un incident réseau : la
+                # position affichée est fausse, il faut la recaler ET le dire.
+                if ($r.Etat) {
+                    $script:echecsEtat = $r.Etat
+                    [void](Sync-PartieBarre $Config)
+                    $redessiner = $true
+                }
+                if ($tache -and $tache.Route -ne '/etat') {
+                    [void][System.Windows.Forms.MessageBox]::Show(
+                        ("Le serveur a refuse :`r`n`r`n" + $r.Erreur +
+                         "`r`n`r`nLe plateau a ete remis a l'etat du serveur."),
+                        'Echecs', 'OK', 'Warning')
+                }
             }
         }
     } catch {
@@ -313,11 +313,46 @@ function Complete-EchecsPoll {
         try { $script:echecsPs.Dispose() } catch { }
         $script:echecsPs = $null
         $script:echecsHandle = $null
+        $script:echecsTacheEnCours = $null
     }
 
-    $apresNb = -1
-    if ($script:echecsEtat -and $script:echecsEtat.coups) { $apresNb = @($script:echecsEtat.coups).Count }
-    return (($avantTour -ne $script:echecsMonTour) -or ($avantNb -ne $apresNb))
+    Start-TacheSuivante $Config $Dossier
+    return ($redessiner -or ($avantTour -ne $script:echecsMonTour))
+}
+
+function Sync-PartieBarre {
+    # Applique le dernier état reçu à la partie affichée. Renvoie $true si
+    # quelque chose a bougé.
+    param($Config)
+    if (-not $script:echecsEtat) { return $false }
+    $nom = [string]$Config.EchecsNom
+
+    $script:echecsMonTour = Test-MonTourDepuisEtat $script:echecsEtat $nom
+
+    $nbServeur = 0
+    if ($script:echecsEtat.coups) { $nbServeur = @($script:echecsEtat.coups).Count }
+
+    if (-not $script:echecsPartie) {
+        $script:echecsPartie = New-Partie -MonNom $nom
+        $s = Sync-PartieDepuisServeur $script:echecsPartie $script:echecsEtat $nom
+        if (-not $s.Ok) { $script:echecsErreur = $s.Erreur; $script:echecsPartie = $null; return $false }
+        $script:plateauRetourne = ($script:echecsPartie.MaCouleur -eq 'b')
+        return $true
+    }
+
+    # Rien de neuf : on ne touche à rien. Important, car un coup joué ici et
+    # pas encore confirmé rendrait la partie locale plus longue que celle du
+    # serveur — la resynchroniser l'effacerait de l'écran.
+    if ($nbServeur -eq $script:echecsPartie.Coups.Count) { return $false }
+    if ($nbServeur -lt $script:echecsPartie.Coups.Count) { return $false }
+
+    $s = Sync-PartieDepuisServeur $script:echecsPartie $script:echecsEtat $nom
+    if (-not $s.Ok) { $script:echecsErreur = $s.Erreur; return $false }
+    $script:plateauRetourne = ($script:echecsPartie.MaCouleur -eq 'b')
+    $script:plateauSelection = -1
+    $script:plateauCibles = @()
+    $script:plateauPromo = $null
+    return $true
 }
 
 function Test-MonTourDepuisEtat {
@@ -335,89 +370,142 @@ function Test-MonTourDepuisEtat {
 }
 
 # ---------------------------------------------------------------------------
-#  La fenêtre de jeu
+#  Le plateau : ouverture, clics, coups
 # ---------------------------------------------------------------------------
 
-$script:echecsFenetre = $null
-$script:echecsPartie  = $null
-
-function Update-AffichageEchecs {
-    # Appelée depuis des fermetures, qui ne peuvent pas lire $script: elles-mêmes.
-    if ($script:echecsFenetre -and -not $script:echecsFenetre.Form.IsDisposed) {
-        $script:echecsFenetre.Panneau.Invalidate()
-    }
-}
-
-function Open-FenetreEchecs {
+function Switch-PlateauEchecs {
+    # Déplie ou replie. Instantané : on n'attend rien du réseau, on affiche la
+    # dernière position connue et on demande la suite en arrière-plan.
     param($Config, [string]$Dossier)
-
-    # Déjà ouverte : on la ramène devant plutôt que d'en ouvrir une seconde.
-    if ($script:echecsFenetre -and -not $script:echecsFenetre.Form.IsDisposed) {
-        $script:echecsFenetre.Form.Activate()
-        return
+    $script:echecsOuvert = -not $script:echecsOuvert
+    $script:plateauSelection = -1
+    $script:plateauCibles = @()
+    $script:plateauPromo = $null
+    if ($script:echecsOuvert) {
+        [void](Sync-PartieBarre $Config)
+        Add-TacheEchecs '/etat' @{} $true
+        Start-TacheSuivante $Config $Dossier
     }
-
-    $nom       = [string]$Config.EchecsNom
-    $adresse   = [string]$Config.EchecsAdresse
-    $code      = [string]$Config.EchecsCode
-    $empreinte = [string]$Config.EchecsEmpreinte
-
-    $r = Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom -Route '/etat' `
-                              -Delai 8 -Empreinte $empreinte
-    if (-not $r.Ok) {
-        [void][System.Windows.Forms.MessageBox]::Show(
-            ("Le serveur ne repond pas :`r`n`r`n" + $r.Erreur), 'Echecs', 'OK', 'Warning')
-        return
-    }
-
-    # Si une place est encore libre, on se présente. (Sans objet quand le
-    # serveur a une liste blanche : les deux places y sont déjà attribuées.)
-    if ($r.Etat.joueurs.w -ne $nom -and $r.Etat.joueurs.b -ne $nom) {
-        $j = Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom `
-                                  -Route '/rejoindre' -Delai 8 -Empreinte $empreinte
-        if ($j.Ok) { $r = $j }
-    }
-
-    $partie = New-Partie -MonNom $nom
-    $s = Sync-PartieDepuisServeur $partie $r.Etat $nom
-    if (-not $s.Ok) {
-        [void][System.Windows.Forms.MessageBox]::Show($s.Erreur, 'Echecs', 'OK', 'Warning')
-        return
-    }
-    $script:echecsPartie = $partie
-
-    $envoyer = {
-        param($P, $Coup)
-        # Le coup vient d'être appliqué localement : la version connue AVANT
-        # ce coup est donc le nombre de coups moins celui-ci.
-        $avant = $P.Coups.Count - 1
-        $dernier = $P.Coups[$P.Coups.Count - 1]
-        $rep = Send-CoupServeur -Partie $P -Adresse $adresse -Code $code -MonNom $nom `
-                                -CoupUci $dernier -AvantVersion $avant -Empreinte $empreinte
-        if (-not $rep.Ok) {
-            [void][System.Windows.Forms.MessageBox]::Show(
-                ("Le serveur a refuse ce coup :`r`n`r`n" + $rep.Erreur +
-                 "`r`n`r`nLa partie a ete remise a l'etat du serveur."),
-                'Echecs', 'OK', 'Warning')
-        }
-        Update-AffichageEchecs
-    }.GetNewClosure()
-
-    $script:echecsFenetre = Show-FenetreEchecs -Partie $partie -SurCoup $envoyer `
-                                -CheminIcone (Join-Path $Dossier 'TokenBar.ico')
 }
 
-function Sync-FenetreEchecsOuverte {
-    # Appelée quand un sondage rapporte du neuf : si la fenêtre est ouverte,
-    # elle doit voir le coup de l'adversaire sans qu'on la rouvre.
-    param($Config)
-    if (-not $script:echecsFenetre -or $script:echecsFenetre.Form.IsDisposed) { return }
-    if (-not $script:echecsEtat -or -not $script:echecsPartie) { return }
+function Invoke-ClicPlateau {
+    # Un clic sur le damier. Renvoie $true s'il faut redessiner.
+    param($Geo, [int]$PX, [int]$PY, $Config, [string]$Dossier)
 
-    $nb = 0
-    if ($script:echecsEtat.coups) { $nb = @($script:echecsEtat.coups).Count }
-    if ($nb -eq $script:echecsPartie.Coups.Count) { return }   # rien de neuf
+    $partie = $script:echecsPartie
+    if (-not $partie) { return $false }
 
-    $s = Sync-PartieDepuisServeur $script:echecsPartie $script:echecsEtat ([string]$Config.EchecsNom)
-    if ($s.Ok) { Update-AffichageEchecs }
+    # Un choix de promotion ouvert capte le clic, ou se referme.
+    if ($script:plateauPromo) {
+        foreach ($choix in $script:plateauPromo.Cases) {
+            if ($choix.Rect.Contains($PX, $PY)) {
+                $coup = $choix.Coup
+                $script:plateauPromo = $null
+                Invoke-CoupBarre $coup $Config $Dossier
+                return $true
+            }
+        }
+        $script:plateauPromo = $null
+        return $true
+    }
+
+    $case = Get-CaseDepuisPointBarre $Geo $PX $PY
+    if ($case -lt 0 -or -not (Test-MonTour $partie)) {
+        $script:plateauSelection = -1; $script:plateauCibles = @()
+        return $true
+    }
+
+    # Deuxième clic sur une case pointée : on joue.
+    if ($script:plateauSelection -ge 0 -and ($script:plateauCibles -contains $case)) {
+        $candidats = @(Get-CoupVers $partie $script:plateauSelection $case)
+        $script:plateauSelection = -1; $script:plateauCibles = @()
+        if ($candidats.Count -eq 1) {
+            Invoke-CoupBarre $candidats[0] $Config $Dossier
+        } elseif ($candidats.Count -gt 1) {
+            # Plusieurs coups pour un même trajet : c'est une promotion.
+            $script:plateauPromo = @{ Arrivee = $case; Candidats = $candidats; Cases = @() }
+        }
+        return $true
+    }
+
+    # Sinon : sélection d'une de ses propres pièces.
+    $piece = $partie.Pos.B[$case]
+    if ($piece -ne ' ' -and ([char]::IsUpper($piece) -eq ($partie.MaCouleur -eq 'w'))) {
+        $script:plateauSelection = $case
+        $script:plateauCibles = @(Get-CoupsDepuis $partie $case)
+    } else {
+        $script:plateauSelection = -1
+        $script:plateauCibles = @()
+    }
+    return $true
+}
+
+function Invoke-CoupBarre {
+    # Le coup est appliqué LOCALEMENT tout de suite — c'est ce que le joueur
+    # voit — puis mis en file pour partir dans le fil de fond. Aucune attente
+    # réseau sur le fil de l'interface.
+    param([int]$Coup, $Config, [string]$Dossier)
+
+    $partie = $script:echecsPartie
+    $avant = $partie.Coups.Count
+    if (-not (Add-CoupPartie $partie $Coup)) { return }
+    $uci = $partie.Coups[$partie.Coups.Count - 1]
+
+    $corps = @{ coup = $uci; apresVersion = $avant }
+    if ($partie.Resultat) { $corps['resultat'] = $partie.Resultat }
+    Add-TacheEchecs '/coup' $corps $true
+    Start-TacheSuivante $Config $Dossier
+
+    $script:echecsMonTour = $false
+}
+
+function Show-MenuPlateau {
+    # Tout ce qui aurait demandé des boutons vit ici : le plateau reste nu.
+    param($Panneau, $Point, $Config, [string]$Dossier)
+
+    $menu = New-Object System.Windows.Forms.ContextMenuStrip
+    $partie = $script:echecsPartie
+
+    $mRetourner = $menu.Items.Add('Retourner le plateau')
+    $mRetourner.Add_Click({ Switch-OrientationPlateau }.GetNewClosure())
+
+    $mNouvelle = $menu.Items.Add('Nouvelle partie')
+    $mNouvelle.Enabled = ($partie -and (Test-PartieTerminee $partie))
+    $mNouvelle.Add_Click({
+        Add-TacheEchecs '/nouvelle' @{} $true
+        Start-TacheSuivante $Config $Dossier
+        Reset-PartieBarre
+    }.GetNewClosure())
+
+    $mAbandon = $menu.Items.Add('Abandonner')
+    $mAbandon.Enabled = ($partie -and -not (Test-PartieTerminee $partie))
+    $mAbandon.Add_Click({
+        $rep = [System.Windows.Forms.MessageBox]::Show(
+            'Abandonner cette partie ? Le point va a ton adversaire.',
+            'Echecs', 'YesNo', 'Question')
+        if ($rep -eq 'Yes') {
+            Add-TacheEchecs '/abandon' @{} $true
+            Start-TacheSuivante $Config $Dossier
+        }
+    }.GetNewClosure())
+
+    [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    $mConnexion = $menu.Items.Add('Connexion...')
+    $mConnexion.Add_Click({ Invoke-ConnexionEchecs }.GetNewClosure())
+
+    $menu.Show($Panneau, $Point)
+}
+
+function Switch-OrientationPlateau {
+    $script:plateauRetourne = -not $script:plateauRetourne
+    $script:plateauSelection = -1
+    $script:plateauCibles = @()
+}
+
+function Reset-PartieBarre {
+    # La partie locale est oubliee : la reponse du serveur la reconstruira.
+    $script:echecsPartie = $null
+    $script:plateauSelection = -1
+    $script:plateauCibles = @()
+    $script:plateauPromo = $null
 }

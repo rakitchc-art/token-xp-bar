@@ -77,7 +77,7 @@ $fichiers = @(
     'TokenBar.ps1', 'Get-TokenUsage.ps1', 'Start-TokenBar.vbs', 'Install-Autostart.ps1',
     'TokenBar.ico',
     'echecs\Moteur-Echecs.ps1', 'echecs\Rendu-Echiquier.ps1', 'echecs\Partie-Echecs.ps1',
-    'echecs\Client-Serveur.ps1', 'echecs\Fenetre-Echecs.ps1', 'echecs\Integration-TokenBar.ps1',
+    'echecs\Client-Serveur.ps1', 'echecs\Plateau-Barre.ps1', 'echecs\Integration-TokenBar.ps1',
     'echecs\LISEZMOI-echecs.md',
     'serveur\echecs-serveur.js'
 )
@@ -97,7 +97,7 @@ foreach ($rel in $fichiers) {
 
 # Le BOM est ce qui decide si PowerShell 5.1 lit un .ps1 en UTF-8 ou en ANSI :
 # il merite son propre controle, separement de la comparaison globale.
-foreach ($rel in @('TokenBar.ps1', 'echecs\Moteur-Echecs.ps1', 'echecs\Fenetre-Echecs.ps1')) {
+foreach ($rel in @('TokenBar.ps1', 'echecs\Moteur-Echecs.ps1', 'echecs\Plateau-Barre.ps1')) {
     $b = Join-Path $cible $rel
     if (-not (Test-Path $b)) { continue }
     $o = [IO.File]::ReadAllBytes($b)

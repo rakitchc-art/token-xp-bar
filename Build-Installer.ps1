@@ -34,7 +34,7 @@ $fichiers = @(
     'echecs\Rendu-Echiquier.ps1',
     'echecs\Partie-Echecs.ps1',
     'echecs\Client-Serveur.ps1',
-    'echecs\Fenetre-Echecs.ps1',
+    'echecs\Plateau-Barre.ps1',
     'echecs\Integration-TokenBar.ps1',
     'echecs\LISEZMOI-echecs.md',
     'serveur\echecs-serveur.js'

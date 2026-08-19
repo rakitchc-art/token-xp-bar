@@ -67,7 +67,9 @@ $config = [pscustomobject]@{
     # Reglages des echecs. Vides = fonctionnalite invisible.
     # EchecsEmpreinte : empreinte du certificat du serveur, notee a la
     # premiere connexion et exigee a l'identique ensuite (voir Client-Serveur).
+    # EchecsTaille : cote du damier en pixels, retenu d'une ouverture a l'autre.
     EchecsNom = ''; EchecsAdresse = ''; EchecsCode = ''; EchecsEmpreinte = ''
+    EchecsTaille = 232
 }
 if (Test-Path $configPath) {
     try { $s = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -99,12 +101,6 @@ $script:BX = 24.0; $script:BH = 12.0; $script:BY = ([single]$HB - $script:BH) / 
 $script:BW = [single]$W - 24.0 - 44.0; $script:RAD = $script:BH / 2
 $script:HeartRect = New-Object System.Drawing.Rectangle 2, 2, 18, 16
 $script:PctRect    = New-Object System.Drawing.Rectangle ([int]($W - 44)), 0, 42, $HB
-
-# Le pion des echecs : 9 x 8 cellules de 2 px, centre sous le pourcentage.
-$script:PionCell = 2.0
-$script:PionRect = New-Object System.Drawing.Rectangle `
-    ([int]($W - 44 + (42 - 18) / 2)), ($HB + 2), 18, 16
-$script:HEchecs  = $script:PionRect.Bottom + 2       # hauteur de fenetre quand le jeu est la
 
 function New-RoundedPath([single]$x,[single]$y,[single]$w,[single]$h,[single]$r) {
     $d = $r*2; if ($d -gt $h) { $d = $h }; if ($d -gt $w) { $d = $w }
@@ -151,13 +147,23 @@ $panel.GetType().GetProperty('DoubleBuffered',
     [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic
 ).SetValue($panel, $true, $null)
 
-# --- Echecs : hauteur de la fenetre et porte d'entree cachee -----------------
-function Update-HauteurFenetre {
-    # La fenetre s'allonge vers le BAS pour loger le pion : la barre elle-meme
-    # ne bouge pas d'un pixel, et la zone ajoutee est transparente.
-    $voulu = $HB
-    if ($script:echecsDispo -and (Test-EchecsConfigure $config)) { $voulu = $script:HEchecs }
-    if ($form.Height -ne $voulu) { $form.Height = $voulu }
+# --- Echecs : taille de la fenetre et porte d'entree cachee ------------------
+function Get-GeoEchecs {
+    # Geometrie courante. Sans les echecs, la fenetre garde sa taille d'origine.
+    if (-not $script:echecsDispo -or -not (Test-EchecsConfigure $config)) {
+        return @{ Ouvert = $false; OX = 0; LargeurFenetre = $W; HauteurFenetre = $HB; Fleche = $null }
+    }
+    return Get-GeometrieEchecs $W $HB
+}
+
+function Update-FenetreEchecs {
+    # La fenetre grandit vers le BAS et vers la GAUCHE : son bord droit ne
+    # bouge pas, donc la barre reste exactement ou elle est a l'ecran.
+    $geo = Get-GeoEchecs
+    if ($form.Width -eq $geo.LargeurFenetre -and $form.Height -eq $geo.HauteurFenetre) { return }
+    $droite = $form.Left + $form.Width
+    $form.Size = New-Object System.Drawing.Size $geo.LargeurFenetre, $geo.HauteurFenetre
+    $form.Left = $droite - $form.Width
 }
 
 function Invoke-ConnexionEchecs {
@@ -174,7 +180,8 @@ function Invoke-ConnexionEchecs {
         Save-Config
     } else { return }
     $script:echecsMonTour = $false
-    Update-HauteurFenetre
+    $script:echecsOuvert = $false
+    Update-FenetreEchecs
     $panel.Invalidate()
     Start-EchecsPoll $config $scriptDir
 }
@@ -193,6 +200,12 @@ $panel.Add_Paint({
     $g.SmoothingMode='AntiAlias'; $g.PixelOffsetMode='HighQuality'
     $g.TextRenderingHint=[System.Drawing.Text.TextRenderingHint]::AntiAlias
     $g.Clear($KEY)
+
+    # Quand le plateau est ouvert, la fenetre est plus large que la barre. La
+    # barre reste collee a DROITE : on decale donc tout son dessin, plutot que
+    # de reecrire chacune de ses coordonnees.
+    $geo = Get-GeoEchecs
+    if ($geo.OX -gt 0) { $g.TranslateTransform([single]$geo.OX, 0.0) }
 
     Write-PixelHeart $g 2 2 2                    # coeur pixel a gauche
 
@@ -238,13 +251,14 @@ $panel.Add_Paint({
         [System.Windows.Forms.TextRenderer]::DrawText($g,$hoverLine,$hoverFont,$rf,([System.Drawing.Color]::FromArgb(238,238,238)),$TXTFLAGS)
         if ($script:weeklyText) { $hoverFont.Dispose() }
     }
-    # Le pion des echecs, sous le pourcentage. Il n'existe que si un serveur a
-    # ete enregistre : sans ca, la barre est exactement celle d'avant.
-    if ($script:echecsDispo -and (Test-EchecsConfigure $config)) {
-        Write-PixelPion $g $script:PionRect.X $script:PionRect.Y $script:PionCell $script:echecsMonTour
-    }
-
     $ol.Dispose(); $outer.Dispose(); $font.Dispose()
+
+    # La fleche et le plateau, eux, sont deja en coordonnees de FENETRE.
+    $g.ResetTransform()
+    if ($geo.Fleche) {
+        Draw-FlecheEchecs $g $geo.Fleche $script:echecsOuvert $script:flecheEtat $script:echecsMonTour
+        Draw-PlateauBarre $g $geo $script:echecsPartie
+    }
 })
 
 # --- Detection de survol PRECISE : uniquement sur la forme visible (coeur,
@@ -296,10 +310,55 @@ $script:drag = $false; $script:moved = $false; $script:dragOff = New-Object Syst
 $script:coeurClics = 0
 $script:coeurDernier = [datetime]::MinValue
 
+$script:redimDepart = $null      # etat du redimensionnement du plateau
+$script:flecheEnfoncee = $false
+
+function Get-PointBarre {
+    # Convertit un point de la FENETRE en point de la BARRE : quand le plateau
+    # est ouvert, la fenetre est plus large et la barre est decalee a droite.
+    param($E, $Geo)
+    return New-Object System.Drawing.Point (($E.X - $Geo.OX), $E.Y)
+}
+
 $panel.Add_MouseDown({ param($s,$e)
+    $geo = Get-GeoEchecs
+
+    # --- clic droit : le menu depend de l'endroit -------------------------
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
+        if ($geo.Ouvert -and $geo.Cadre.Contains($e.Location)) {
+            Show-MenuPlateau $panel $e.Location $config $scriptDir
+        } else {
+            $menu.Show($panel, $e.Location)
+        }
+        return
+    }
     if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
 
-    if ($script:echecsDispo -and $script:HeartRect.Contains($e.Location)) {
+    # --- poignee de redimensionnement -------------------------------------
+    if ($geo.Ouvert -and $geo.Poignee.Contains($e.Location)) {
+        $script:redimDepart = @{ Souris = $panel.PointToScreen($e.Location); Cote = $script:echecsTaille }
+        return
+    }
+
+    # --- la fleche ---------------------------------------------------------
+    if ($geo.Fleche -and $geo.Fleche.Contains($e.Location)) {
+        $script:flecheEnfoncee = $true
+        $script:flecheEtat = 'enfonce'
+        $panel.Invalidate()
+        return
+    }
+
+    # --- le plateau --------------------------------------------------------
+    if ($geo.Ouvert -and $geo.Cadre.Contains($e.Location)) {
+        if (Invoke-ClicPlateau $geo $e.X $e.Y $config $scriptDir) { $panel.Invalidate() }
+        return
+    }
+
+    # --- en dehors de la barre elle-meme : on ignore ----------------------
+    $pb = Get-PointBarre $e $geo
+    if ($pb.Y -ge $HB) { return }
+
+    if ($script:echecsDispo -and $script:HeartRect.Contains($pb)) {
         $mods = [System.Windows.Forms.Control]::ModifierKeys
         $ctrl = (($mods -band [System.Windows.Forms.Keys]::Control) -ne 0)
         $maj  = (($mods -band [System.Windows.Forms.Keys]::Shift)   -ne 0)
@@ -320,18 +379,69 @@ $panel.Add_MouseDown({ param($s,$e)
     $script:drag = $true; $script:moved = $false; $script:dragOff = $e.Location
 })
 $panel.Add_MouseMove({ param($s,$e)
+    if ($script:redimDepart) {
+        # La barre est ancree au bord DROIT de l'ecran : le plateau grandit
+        # donc vers la GAUCHE et vers le BAS. Tirer la poignee dans ces deux
+        # directions agrandit, dans les deux autres reduit.
+        $p = $panel.PointToScreen($e.Location)
+        $dx = $script:redimDepart.Souris.X - $p.X
+        $dy = $p.Y - $script:redimDepart.Souris.Y
+        $voulu = [int]($script:redimDepart.Cote + ($dx + $dy) / 2)
+        $voulu = [math]::Max($script:PLATEAU_MIN, [math]::Min($script:PLATEAU_MAX, $voulu))
+        if ($voulu -ne $script:echecsTaille) {
+            $script:echecsTaille = $voulu
+            Update-FenetreEchecs
+            $panel.Invalidate()
+        }
+        return
+    }
+
     if ($script:drag) {
         $script:moved = $true
         $form.Location = New-Object System.Drawing.Point `
             (($form.Location.X + $e.X - $script:dragOff.X), ($form.Location.Y + $e.Y - $script:dragOff.Y))
+        return
     }
+
+    # Curseur et etat de survol : ce qui donne le sentiment d'un vrai bouton.
+    $geo = Get-GeoEchecs
+    $curseur = [System.Windows.Forms.Cursors]::Default
+    $etatFleche = 'normal'
+    if ($geo.Ouvert -and $geo.Poignee.Contains($e.Location)) {
+        $curseur = [System.Windows.Forms.Cursors]::SizeNESW
+    } elseif ($geo.Fleche -and $geo.Fleche.Contains($e.Location)) {
+        $curseur = [System.Windows.Forms.Cursors]::Hand
+        $etatFleche = $(if ($script:flecheEnfoncee) { 'enfonce' } else { 'survol' })
+    }
+    if ($panel.Cursor -ne $curseur) { $panel.Cursor = $curseur }
+    if ($script:flecheEtat -ne $etatFleche) { $script:flecheEtat = $etatFleche; $panel.Invalidate() }
 })
+
 $panel.Add_MouseUp({ param($s,$e)
+    if ($script:redimDepart) {
+        $script:redimDepart = $null
+        $config.EchecsTaille = $script:echecsTaille
+        Save-Config
+        return
+    }
+
+    if ($script:flecheEnfoncee) {
+        $script:flecheEnfoncee = $false
+        $script:flecheEtat = 'normal'
+        $geo = Get-GeoEchecs
+        # On ne bascule que si le doigt est RELACHE sur la fleche : relacher
+        # ailleurs annule, comme n'importe quel bouton.
+        if ($geo.Fleche -and $geo.Fleche.Contains($e.Location)) {
+            Switch-PlateauEchecs $config $scriptDir
+            Update-FenetreEchecs
+        }
+        $panel.Invalidate()
+        return
+    }
+
     if ($script:drag) {
         $script:drag = $false
         if ($script:moved) { $config.PosRight = $form.Left + $form.Width; $config.PosY = $form.Top; Save-Config }
-        elseif ($script:echecsDispo -and (Test-EchecsConfigure $config) -and
-                $script:PionRect.Contains($e.Location)) { Open-FenetreEchecs $config $scriptDir }
         else { Start-BgUpdate }
     }
 })
@@ -341,7 +451,9 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $miRefresh = $menu.Items.Add("Actualiser maintenant"); $miRefresh.Add_Click({ Start-BgUpdate })
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miClose = $menu.Items.Add("Fermer"); $miClose.Add_Click({ $form.Close() })
-$panel.ContextMenuStrip = $menu
+# Pas d'affectation a ContextMenuStrip : le menu est ouvert a la main dans
+# MouseDown, pour pouvoir en presenter un AUTRE quand le clic droit tombe sur
+# le plateau d'echecs.
 
 # --- Visibilite : seulement quand VS Code est la fenetre ACTIVE --------------
 function Sync-Visibility {
@@ -370,8 +482,7 @@ $timer.Add_Tick({
     # Sondage des echecs : toutes les 30 s au repos, toutes les 5 s quand la
     # fenetre de jeu est ouverte (on veut voir le coup de l'adversaire vite).
     if ($script:echecsDispo -and (Test-EchecsConfigure $config)) {
-        $periode = 30
-        if ($script:echecsFenetre -and -not $script:echecsFenetre.Form.IsDisposed) { $periode = 5 }
+        $periode = $(if ($script:echecsOuvert) { 5 } else { 30 })
         if (($script:tick % $periode) -eq 0) { Start-EchecsPoll $config $scriptDir }
     }
 
@@ -401,8 +512,7 @@ $pollTimer.Add_Tick({
     }
     # Meme mecanique pour les echecs : on ramasse le resultat quand il est
     # pret, sans jamais attendre le reseau sur le fil de l'interface.
-    if ($script:echecsDispo -and (Complete-EchecsPoll)) {
-        Sync-FenetreEchecsOuverte $config
+    if ($script:echecsDispo -and (Complete-EchecsPoll $config $scriptDir)) {
         $panel.Invalidate()
     }
 })
@@ -416,7 +526,21 @@ $pollTimer.Start()
 $hoverTimer = New-Object System.Windows.Forms.Timer
 $hoverTimer.Interval = 150
 $hoverTimer.Add_Tick({
+    # La minuterie peut encore se declencher une fois APRES la fermeture :
+    # interroger un panneau detruit leve une exception a chaque tic.
+    if ($panel.IsDisposed -or $form.IsDisposed) { return }
     $localPt = $panel.PointToClient([System.Windows.Forms.Cursor]::Position)
+    $geoSurvol = Get-GeoEchecs
+    # La souris peut quitter la fleche par une zone transparente, qui ne
+    # produit aucun evenement : sans cette relecture periodique, l'etat de
+    # survol resterait allume indefiniment.
+    if ($geoSurvol.Fleche -and -not $script:flecheEnfoncee) {
+        $attendu = $(if ($geoSurvol.Fleche.Contains($localPt)) { 'survol' } else { 'normal' })
+        if ($script:flecheEtat -ne $attendu) { $script:flecheEtat = $attendu; $panel.Invalidate() }
+    }
+    if ($geoSurvol.OX -gt 0) {
+        $localPt = New-Object System.Drawing.Point (($localPt.X - $geoSurvol.OX), $localPt.Y)
+    }
     $over = Test-OverBar $localPt
     if ($over) {
         $script:resetText  = Format-Reset $script:lastResetTime
@@ -435,8 +559,21 @@ $hoverTimer.Start()
 # secondes de lecture) : la fenetre s'affiche tout de suite avec "..." et se
 # met a jour des que le resultat arrive (pollTimer), sans jamais geler l'UI.
 Start-BgUpdate
-if ($script:echecsDispo) { Update-HauteurFenetre; Start-EchecsPoll $config $scriptDir }
+if ($script:echecsDispo) {
+    $t = [int]$config.EchecsTaille
+    if ($t -ge $script:PLATEAU_MIN -and $t -le $script:PLATEAU_MAX) { $script:echecsTaille = $t }
+    Update-FenetreEchecs
+    Start-EchecsPoll $config $scriptDir
+}
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $form.Add_Shown({ Sync-Visibility })
-$form.Add_FormClosed({ try { $script:bgPs.Dispose() } catch {}; try { $script:bgRunspace.Close(); $script:bgRunspace.Dispose() } catch {} })
+$form.Add_FormClosed({
+    # Arreter les minuteries AVANT de liberer quoi que ce soit : sinon un
+    # dernier tic interroge des objets deja detruits.
+    foreach ($t in @($timer, $visTimer, $pollTimer, $hoverTimer)) { try { $t.Stop() } catch {} }
+    try { $script:bgPs.Dispose() } catch {}
+    try { $script:bgRunspace.Close(); $script:bgRunspace.Dispose() } catch {}
+    try { $script:echecsPs.Dispose() } catch {}
+    try { $script:echecsRunspace.Close(); $script:echecsRunspace.Dispose() } catch {}
+})
 [System.Windows.Forms.Application]::Run($form)

@@ -69,7 +69,10 @@ Write-Host ("Serveur de test : 127.0.0.1:" + $port)
 $cfg = @{ PosRight = 700; PosY = 60; LiveFactor = 1.0 }
 if (-not $SansEchecs) {
     $cfg['EchecsNom']     = 'Dova'
-    $cfg['EchecsAdresse'] = '127.0.0.1:' + $port
+    # http:// explicite : ce banc eprouve l'interface, pas le chiffrement (qui
+    # a sa propre suite). Sans le prefixe, le client passerait en https et ne
+    # trouverait personne, comme il l'a fait au premier essai.
+    $cfg['EchecsAdresse'] = 'http://127.0.0.1:' + $port
     $cfg['EchecsCode']    = $code
 }
 $sansBom = New-Object System.Text.UTF8Encoding $false
@@ -89,25 +92,69 @@ if ($src -eq $avant) { throw 'retouche 2 (affichage initial) sans effet' }
 
 $capture = @'
 $form.Show()
-$capTimer = New-Object System.Windows.Forms.Timer
-$capTimer.Interval = 5000
-$capTimer.Add_Tick({
-    $capTimer.Stop()
-    Write-Host ("hauteur fenetre : " + $form.Height)
-    Write-Host ("mon tour : " + $script:echecsMonTour)
-    Write-Host ("erreur echecs : '" + $script:echecsErreur + "'")
-    $coups = 'aucun etat'
-    if ($script:echecsEtat) { $coups = 'coups=' + @($script:echecsEtat.coups).Count + ' blancs=' + $script:echecsEtat.joueurs.w }
-    Write-Host ("etat serveur : " + $coups)
+function Save-Capture([string]$chemin) {
     $img = New-Object System.Drawing.Bitmap $form.Width, $form.Height
     $form.DrawToBitmap($img, (New-Object System.Drawing.Rectangle 0, 0, $form.Width, $form.Height))
-    $img.Save($env:TOKENBAR_CAPTURE, [System.Drawing.Imaging.ImageFormat]::Png)
+    $img.Save($chemin, [System.Drawing.Imaging.ImageFormat]::Png)
     $img.Dispose()
-    $form.Close()
+    Write-Host ("capture " + $form.Width + " x " + $form.Height + " -> " + $chemin)
+}
+# Compteur dans une table : dans une fermeture, "$n++" ecrit dans une copie
+# locale jetee a chaque appel et le compteur reste bloque a 1.
+$pas = @{ n = 0 }
+$capTimer = New-Object System.Windows.Forms.Timer
+$capTimer.Interval = 4000
+$capTimer.Add_Tick({
+    $pas.n++
+    if ($pas.n -eq 1) {
+        Write-Host ("mon tour : " + $script:echecsMonTour)
+        Write-Host ("erreur echecs : '" + $script:echecsErreur + "'")
+        $coups = 'aucun etat'
+        if ($script:echecsEtat) { $coups = 'coups=' + @($script:echecsEtat.coups).Count + ' blancs=' + $script:echecsEtat.joueurs.w }
+        Write-Host ("etat serveur : " + $coups)
+        Save-Capture $env:TOKENBAR_CAPTURE
+        if ($env:TOKENBAR_CAPTURE2) {
+            # On passe par le VRAI basculement, pas par une affectation directe.
+            Switch-PlateauEchecs $config $scriptDir
+            Update-FenetreEchecs
+            $panel.Invalidate()
+            $capTimer.Interval = 2500
+            return
+        }
+        $capTimer.Stop(); $form.Close(); return
+    }
+    if ($pas.n -eq 2 -and $env:TOKENBAR_CAPTURE2) {
+        Write-Host ("plateau ouvert : " + $script:echecsOuvert + ", cote = " + $script:echecsTaille)
+        Save-Capture $env:TOKENBAR_CAPTURE2
+
+        # Un vrai coup, par le VRAI chemin de clic : coordonnees ecran -> case
+        # -> selection -> coup. C'est ce qui prouve que le plateau est jouable,
+        # pas une affectation directe dans la partie.
+        $geo = Get-GeoEchecs
+        $de = Get-PointCaseBarre $geo (ConvertTo-CaseIndex 'e2')
+        $a  = Get-PointCaseBarre $geo (ConvertTo-CaseIndex 'e4')
+        $m = [int]($geo.Case / 2)
+        [void](Invoke-ClicPlateau $geo ($de.X + $m) ($de.Y + $m) $config $scriptDir)
+        Write-Host ("apres clic sur e2 : " + @($script:plateauCibles).Count + " cases pointees")
+        [void](Invoke-ClicPlateau $geo ($a.X + $m) ($a.Y + $m) $config $scriptDir)
+        $panel.Invalidate()
+        Write-Host ("coups joues localement : " + $script:echecsPartie.Coups.Count)
+        if ($script:echecsPartie.Coups.Count -ge 1) {
+            Write-Host ("dernier coup local : " + $script:echecsPartie.San[0])
+        }
+        # On laisse le temps a l'envoi de fond d'aboutir.
+        $capTimer.Interval = 3000
+        return
+    }
+    if ($pas.n -eq 3) {
+        Write-Host ("erreur apres le coup : '" + $script:echecsErreur + "'")
+        Save-Capture ($env:TOKENBAR_CAPTURE2 -replace '\.png$', '-apres-coup.png')
+    }
+    $capTimer.Stop(); $form.Close()
 })
 $capTimer.Start()
 $garde = New-Object System.Windows.Forms.Timer
-$garde.Interval = 25000
+$garde.Interval = 30000
 $garde.Add_Tick({ $garde.Stop(); Write-Host 'CHIEN DE GARDE'; $form.Close() })
 $garde.Start()
 [System.Windows.Forms.Application]::Run($form)
@@ -124,6 +171,11 @@ $avecBom = New-Object System.Text.UTF8Encoding $true
 
 # --- lancement ------------------------------------------------------------
 $env:TOKENBAR_CAPTURE = $sortie
+$env:TOKENBAR_CAPTURE2 = ''
+if (-not $SansEchecs) {
+    $env:TOKENBAR_CAPTURE2 = Join-Path $PSScriptRoot 'barre-plateau-ouvert.png'
+    if (Test-Path $env:TOKENBAR_CAPTURE2) { Remove-Item $env:TOKENBAR_CAPTURE2 -Force }
+}
 Write-Host 'Lancement de la barre du bac a sable...'
 [void](Start-Process -FilePath 'powershell.exe' `
     -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', (Join-Path $bac 'TokenBar.ps1')) `
@@ -137,6 +189,24 @@ $errFichier = Join-Path $bac 'erreurs.txt'
 if ((Test-Path $errFichier) -and (Get-Item $errFichier).Length -gt 0) {
     Write-Host '--- ERREURS ---' -ForegroundColor Red
     Get-Content $errFichier | Select-Object -First 25 | ForEach-Object { Write-Host ('  ' + $_) -ForegroundColor Red }
+}
+
+# --- le serveur a-t-il RECU le coup ? -------------------------------------
+# La question qui compte : l'envoi de fond aboutit-il vraiment ? Le verifier
+# depuis l'interface reviendrait a lui demander si elle a bien fait son travail.
+if (-not $SansEchecs) {
+    if (Test-Path $etatFichier) {
+        $etatServeur = [System.IO.File]::ReadAllText($etatFichier) | ConvertFrom-Json
+        $coups = @($etatServeur.coups)
+        Write-Host ("Coups enregistres par le SERVEUR : " + $(if ($coups.Count) { $coups -join ',' } else { 'aucun' }))
+        if ($coups.Count -eq 1 -and $coups[0] -eq 'e2e4') {
+            Write-Host '  OK   le coup joue au plateau est arrive au serveur' -ForegroundColor Green
+        } else {
+            Write-Host '  RATE le serveur n a pas recu e2e4' -ForegroundColor Red
+        }
+    } else {
+        Write-Host '  RATE aucun fichier d etat cote serveur' -ForegroundColor Red
+    }
 }
 
 # --- menage ---------------------------------------------------------------
