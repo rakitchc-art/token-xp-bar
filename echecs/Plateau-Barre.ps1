@@ -164,19 +164,17 @@ function Draw-FlecheEchecs {
 }
 
 function Get-CouleurCadre {
-    # Le plateau ne porte aucun texte : c'est la couleur du cadre qui dit où en
-    # est la partie. Le code, du plus calme au plus fort :
+    # Le plateau ne porte aucun texte, donc la FIN de partie ne s'annoncerait
+    # nulle part : c'est le rôle de ce liseré, et c'est son seul rôle.
     #
-    #   gris sombre  : rien à signaler, c'est à l'adversaire
-    #   ambre        : c'est à toi de jouer
-    #   orange       : échec
-    #   vert         : tu as gagné
-    #   rouge        : tu as perdu
-    #   bleu-gris    : partie nulle
+    #   rien       : la partie est en cours (à toi ou à lui)
+    #   vert       : tu as gagné
+    #   rouge      : tu as perdu
+    #   bleu-gris  : partie nulle
     #
-    # Les états de fin de partie ont EN PLUS un liseré clair à l'intérieur :
-    # une information portée par la seule couleur serait invisible pour qui
-    # distingue mal le rouge du vert.
+    # Chaque fin a EN PLUS un liseré clair à l'intérieur : une information
+    # portée par la seule couleur serait invisible pour qui distingue mal le
+    # rouge du vert.
     param($Partie)
 
     # Rien a signaler = AUCUN liseré : on ne voit que le plateau.
@@ -197,12 +195,9 @@ function Get-CouleurCadre {
                   Lisere = [System.Drawing.Color]::FromArgb(255, 240, 158, 150) }
     }
 
-    if ($Partie.Etat -eq 'echec') {
-        return @{ Cadre = [System.Drawing.Color]::FromArgb(255, 214, 128, 42); Lisere = $null }
-    }
-    if (Test-MonTour $Partie) {
-        return @{ Cadre = [System.Drawing.Color]::FromArgb(255, 226, 190, 74); Lisere = $null }
-    }
+    # Pas de liseré en cours de partie : « à toi de jouer » est déjà dit par la
+    # pastille rouge de la flèche, et l'échec par la case rouge sous le roi.
+    # Un bord permanent en plus n'ajoutait rien et mangeait le plateau.
     return $neutre
 }
 

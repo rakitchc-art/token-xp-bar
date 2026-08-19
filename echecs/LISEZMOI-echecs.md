@@ -67,21 +67,23 @@ vole le premier plan, et aucun temps d'ouverture.
 Les coups illégaux sont impossibles : le moteur est vérifié par 20 compteurs
 perft de référence, dont 197 281 positions à quatre coups de profondeur.
 
-### Le code couleur du cadre
+### Comment on sait où on en est, sans un mot
 
-Le plateau ne porte aucun texte : c'est la **couleur du cadre** qui dit où en
-est la partie.
-
-| Couleur du cadre | Ce que ça veut dire |
+| Signal | Ce que ça veut dire |
 |---|---|
-| gris très sombre | rien à signaler, c'est à l'adversaire de jouer |
-| ambre | **c'est à toi** |
-| orange | **échec** |
-| vert, avec un liseré clair | tu as gagné |
-| rouge, avec un liseré clair | tu as perdu |
-| bleu-gris, avec un liseré clair | partie nulle |
+| pastille rouge sur la flèche | **c'est à toi de jouer** |
+| case rouge sous un roi | ce roi est en **échec** |
+| deux cases jaunes | le **dernier coup** joué |
+| chevron de la flèche éteint, gris | le serveur ne répond pas ; la barre réessaie toute seule |
+| liseré **vert** autour du plateau | tu as gagné |
+| liseré **rouge** | tu as perdu |
+| liseré **bleu-gris** | partie nulle |
 
-Les trois états de fin de partie ont en plus un **liseré clair à l'intérieur** :
+Pendant la partie, le plateau n'a **aucun bord** : on ne voit que le damier.
+Le liseré n'apparaît qu'à la fin, parce que c'est la seule chose qui ne
+pourrait se deviner ni à la position ni ailleurs.
+
+Chaque fin de partie a en plus un **liseré clair à l'intérieur** du premier :
 une information portée par la seule couleur serait invisible pour qui distingue
 mal le rouge du vert.
 
