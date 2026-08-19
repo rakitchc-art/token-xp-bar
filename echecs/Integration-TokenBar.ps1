@@ -183,8 +183,12 @@ function Show-DialogueConnexionEchecs {
         $b.Text = $paire[1]
         $b.SetBounds($paire[2], 202, 102, 30)
         $b.FlatStyle = 'Flat'
-        $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(90, 88, 84)
-        $b.BackColor = [System.Drawing.Color]::FromArgb(52, 50, 46)
+        $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(96, 93, 88)
+        # Un bouton IGNORE sa couleur de fond tant que UseVisualStyleBackColor
+        # est vrai : sans cette ligne, il reste gris clair sur un fond sombre.
+        $b.UseVisualStyleBackColor = $false
+        $b.BackColor = [System.Drawing.Color]::FromArgb(58, 56, 51)
+        $b.ForeColor = [System.Drawing.Color]::FromArgb(236, 234, 229)
         $f.Controls.Add($b)
         $i++
     }
