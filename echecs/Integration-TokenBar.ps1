@@ -102,6 +102,47 @@ function New-ChampDialogue {
     return $t
 }
 
+function Invoke-EssaiConnexion {
+    # Un essai de connexion depuis le dialogue. $Etat porte l'empreinte déjà
+    # connue et se met à jour avec celle qu'on vient de voir.
+    #
+    # La règle d'épinglage : on n'accepte un certificat inconnu QUE si aucune
+    # empreinte n'est encore enregistrée pour cette adresse. Changer d'adresse
+    # remet donc le compteur à zéro, mais un certificat qui change sur la même
+    # adresse est refusé — c'est tout l'intérêt.
+    param([string]$Nom, [string]$Adresse, [string]$Code, $Etat)
+
+    $memeServeur = ((ConvertTo-AdresseServeur $Adresse) -eq (ConvertTo-AdresseServeur $Etat.AdresseConnue))
+    $empreinte = $(if ($memeServeur) { [string]$Etat.EmpreinteConnue } else { '' })
+
+    if ($empreinte) {
+        $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $Nom `
+                                  -Route '/etat' -Delai 8 -Empreinte $empreinte
+    } else {
+        $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $Nom `
+                                  -Route '/etat' -Delai 8 -AutoriserPremiere
+    }
+
+    if ($r.Ok -and $r.EmpreinteVue) {
+        $Etat.EmpreinteConnue = [string]$r.EmpreinteVue
+        $Etat.AdresseConnue   = $Adresse
+        $Etat.Premiere        = (-not $empreinte)
+    }
+    return $r
+}
+
+function Write-EtatConnexion {
+    param($Etiquette, $Reponse)
+    if ($Reponse.Ok) {
+        $Etiquette.ForeColor = [System.Drawing.Color]::FromArgb(120, 200, 120)
+        $Etiquette.Text = ('Serveur joignable. Blancs : ' + $Reponse.Etat.joueurs.w +
+                           '   Noirs : ' + $Reponse.Etat.joueurs.b)
+    } else {
+        $Etiquette.ForeColor = [System.Drawing.Color]::FromArgb(226, 96, 80)
+        $Etiquette.Text = ('Echec : ' + $Reponse.Erreur)
+    }
+}
+
 function Show-DialogueConnexionEchecs {
     # La seule porte d'entrée. Trois champs, un bouton pour éprouver la
     # connexion AVANT d'enregistrer, et un bouton pour tout effacer — qui fait
@@ -148,31 +189,37 @@ function Show-DialogueConnexionEchecs {
         $i++
     }
 
-    $resultat = @{ Action = 'annule' }
+    $resultat = @{ Action = 'annule'; EmpreinteConnue = [string]$Config.EchecsEmpreinte
+                   AdresseConnue = [string]$Config.EchecsAdresse }
 
     # .GetNewClosure() est indispensable ici : sans lui, ces blocs ne verraient
     # aucune des variables locales de cette fonction ($tNom, $f, $resultat...).
+    # En revanche ils ne doivent contenir QUE des appels de fonction et des
+    # locales — jamais de $script:, qui y vaudrait $null.
     $bTester.Add_Click({
         $etat.ForeColor = [System.Drawing.Color]::FromArgb(150, 148, 143)
         $etat.Text = 'Contact en cours...'
         $f.Refresh()
-        $r = Invoke-ServeurEchecs -Adresse $tAdresse.Text -Code $tCode.Text `
-                                  -Joueur $tNom.Text -Route '/etat' -Delai 6
-        if ($r.Ok) {
-            $etat.ForeColor = [System.Drawing.Color]::FromArgb(120, 200, 120)
-            $etat.Text = ('Serveur joignable. Blancs : ' + $r.Etat.joueurs.w +
-                          '  /  Noirs : ' + $r.Etat.joueurs.b)
-        } else {
-            $etat.ForeColor = [System.Drawing.Color]::FromArgb(226, 96, 80)
-            $etat.Text = ('Echec : ' + $r.Erreur)
-        }
+        $r = Invoke-EssaiConnexion $tNom.Text $tAdresse.Text $tCode.Text $resultat
+        Write-EtatConnexion $etat $r
     }.GetNewClosure())
 
     $bOk.Add_Click({
-        $resultat.Action  = 'enregistre'
-        $resultat.Nom     = $tNom.Text.Trim()
-        $resultat.Adresse = $tAdresse.Text.Trim()
-        $resultat.Code    = $tCode.Text
+        # Enregistrer ESSAIE d'abord. Enregistrer des reglages qui ne
+        # fonctionnent pas ferait apparaitre le pion pour rien, et l'erreur ne
+        # se verrait qu'au premier clic dessus.
+        $etat.ForeColor = [System.Drawing.Color]::FromArgb(150, 148, 143)
+        $etat.Text = 'Verification avant enregistrement...'
+        $f.Refresh()
+        $r = Invoke-EssaiConnexion $tNom.Text $tAdresse.Text $tCode.Text $resultat
+        Write-EtatConnexion $etat $r
+        if (-not $r.Ok) { return }
+
+        $resultat.Action    = 'enregistre'
+        $resultat.Nom       = $tNom.Text.Trim()
+        $resultat.Adresse   = $tAdresse.Text.Trim()
+        $resultat.Code      = $tCode.Text
+        $resultat.Empreinte = $resultat.EmpreinteConnue
         $f.Close()
     }.GetNewClosure())
 
@@ -219,12 +266,17 @@ function Start-EchecsPoll {
     $ps = [powershell]::Create()
     $ps.Runspace = $script:echecsRunspace
     [void]$ps.AddScript({
-        param($adresse, $code, $nom)
-        Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom -Route '/etat' -Delai 7
+        param($adresse, $code, $nom, $empreinte)
+        # Pas de -AutoriserPremiere ici : un sondage de fond ne doit JAMAIS
+        # accepter un certificat inconnu. Seul le dialogue de connexion, où
+        # quelqu'un est devant l'écran, a ce droit.
+        Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom `
+                             -Route '/etat' -Delai 7 -Empreinte $empreinte
     })
     [void]$ps.AddArgument([string]$Config.EchecsAdresse)
     [void]$ps.AddArgument([string]$Config.EchecsCode)
     [void]$ps.AddArgument([string]$Config.EchecsNom)
+    [void]$ps.AddArgument([string]$Config.EchecsEmpreinte)
 
     $script:echecsPs     = $ps
     $script:echecsHandle = $ps.BeginInvoke()
@@ -301,20 +353,24 @@ function Open-FenetreEchecs {
         return
     }
 
-    $nom     = [string]$Config.EchecsNom
-    $adresse = [string]$Config.EchecsAdresse
-    $code    = [string]$Config.EchecsCode
+    $nom       = [string]$Config.EchecsNom
+    $adresse   = [string]$Config.EchecsAdresse
+    $code      = [string]$Config.EchecsCode
+    $empreinte = [string]$Config.EchecsEmpreinte
 
-    $r = Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom -Route '/etat' -Delai 8
+    $r = Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom -Route '/etat' `
+                              -Delai 8 -Empreinte $empreinte
     if (-not $r.Ok) {
         [void][System.Windows.Forms.MessageBox]::Show(
             ("Le serveur ne repond pas :`r`n`r`n" + $r.Erreur), 'Echecs', 'OK', 'Warning')
         return
     }
 
-    # Si une place est encore libre, on se présente.
+    # Si une place est encore libre, on se présente. (Sans objet quand le
+    # serveur a une liste blanche : les deux places y sont déjà attribuées.)
     if ($r.Etat.joueurs.w -ne $nom -and $r.Etat.joueurs.b -ne $nom) {
-        $j = Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom -Route '/rejoindre' -Delai 8
+        $j = Invoke-ServeurEchecs -Adresse $adresse -Code $code -Joueur $nom `
+                                  -Route '/rejoindre' -Delai 8 -Empreinte $empreinte
         if ($j.Ok) { $r = $j }
     }
 
@@ -333,7 +389,7 @@ function Open-FenetreEchecs {
         $avant = $P.Coups.Count - 1
         $dernier = $P.Coups[$P.Coups.Count - 1]
         $rep = Send-CoupServeur -Partie $P -Adresse $adresse -Code $code -MonNom $nom `
-                                -CoupUci $dernier -AvantVersion $avant
+                                -CoupUci $dernier -AvantVersion $avant -Empreinte $empreinte
         if (-not $rep.Ok) {
             [void][System.Windows.Forms.MessageBox]::Show(
                 ("Le serveur a refuse ce coup :`r`n`r`n" + $rep.Erreur +

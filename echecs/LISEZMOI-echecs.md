@@ -20,12 +20,21 @@ Trois champs à remplir :
 | Champ | Quoi mettre |
 |---|---|
 | **Ton nom de joueur** | Ce que tu veux, mais **différent** de celui de ton adversaire, et **toujours le même** d'une partie à l'autre (c'est lui qui porte ton score). |
-| **Adresse du serveur** | `12.34.56.78:8137`, ou un nom de domaine. Le port par défaut est 8137. |
-| **Code partagé** | Le même secret des deux côtés. C'est la seule chose qui protège le serveur. |
+| **Adresse du serveur** | `12.34.56.78:8137`, ou un nom de domaine. Le port par défaut est 8137, et la liaison est en **HTTPS** sauf si on écrit `http://` explicitement. |
+| **Code partagé** | Le même secret des deux côtés. **La casse et les espaces en trop ne comptent pas** : `Le Nom Du Vent` et `le nom du vent`, c'est pareil. |
 
 Le bouton **Tester** contacte le serveur et affiche qui joue les blancs et les
-noirs, avant d'enregistrer quoi que ce soit. Le bouton **Oublier** efface les
-trois champs : le jeu redevient invisible, comme s'il n'avait jamais existé.
+noirs. Le bouton **Enregistrer** refait cet essai avant de sauvegarder : des
+réglages qui ne fonctionnent pas ne sont jamais enregistrés. Le bouton
+**Oublier** efface tout : le jeu redevient invisible, comme s'il n'avait
+jamais existé.
+
+À la toute première connexion, TokenBar note l'**empreinte du certificat** du
+serveur et la garde. Ensuite, il refuse tout certificat différent avec un
+message explicite — même mécanique que SSH. Si un jour tu vois
+« le certificat du serveur a CHANGE », c'est soit que le serveur a été
+réinstallé (alors clique **Oublier** puis reconfigure), soit que quelqu'un
+s'interpose.
 
 Une fois enregistré, un **petit pion** apparaît sous le pourcentage. Un clic
 dessus ouvre la partie. Une **pastille rouge** s'allume sur le pion quand c'est
@@ -67,9 +76,17 @@ Il lui faut trois choses par variables d'environnement :
 | Variable | Rôle | Défaut |
 |---|---|---|
 | `ECHECS_CODE` | le code partagé | **aucun — le serveur refuse de démarrer sans** |
+| `ECHECS_JOUEURS` | les deux seuls noms autorisés, séparés par une virgule | vide = les deux premiers venus |
+| `ECHECS_CERT` / `ECHECS_CLE` | certificat et clé TLS | vide = liaison **en clair**, annoncée bruyamment au démarrage |
 | `ECHECS_PORT` | port d'écoute | `8137` |
 | `ECHECS_ETAT` | fichier d'état JSON | `etat.json` à côté du script |
 | `ECHECS_HOTE` | interface d'écoute | `0.0.0.0` |
+
+`ECHECS_JOUEURS` est le verrou : avec lui, les deux places sont attribuées
+d'office et **personne d'autre ne peut jouer, même en connaissant le code**.
+Le nom est reconnu sans tenir compte de la casse, mais c'est toujours
+l'orthographe de la liste qui est enregistrée — sinon `dova` et `Dova`
+deviendraient deux joueurs avec deux scores.
 
 ### Sur un serveur Linux, en service permanent
 
@@ -105,16 +122,23 @@ hébergeur).
 
 ### Ce que le serveur protège, et ce qu'il ne protège pas
 
-Il protège : le code partagé est comparé à temps constant, le corps des
-requêtes est plafonné à 64 Ko, chaque adresse IP est limitée à 120 requêtes par
-minute, et le fichier d'état est écrit en deux temps (fichier temporaire puis
-renommage) pour qu'une coupure ne laisse jamais un JSON tronqué.
+Il protège : **la liaison est chiffrée** (TLS, certificat auto-signé épinglé
+côté client) — ni le code ni les coups ne circulent en clair. Le code partagé
+est comparé à temps constant, le corps des requêtes est plafonné à 64 Ko,
+chaque adresse IP est limitée à 120 requêtes par minute, seuls les deux noms
+déclarés peuvent jouer, et le fichier d'état est écrit en deux temps (fichier
+temporaire puis renommage) pour qu'une coupure ne laisse jamais un JSON
+tronqué. Une configuration TLS à moitié fournie fait **refuser le démarrage**
+plutôt que de basculer en clair sans le dire.
 
-Il ne protège pas : **la liaison est en HTTP en clair**. Quiconque observe le
-réseau entre les deux joueurs peut lire le code partagé. Pour une partie
-d'échecs entre amis c'est un risque assumé ; si ça devait changer, la réponse
-serait de mettre un reverse-proxy TLS devant (Caddy fait ça en une ligne) ou de
-passer par un réseau privé type Tailscale.
+Il ne protège pas : le tout premier échange. Le certificat n'étant reconnu par
+aucune autorité, la confiance s'établit à la première connexion — quelqu'un
+déjà en position d'intercepter à cet instant précis pourrait s'y glisser. Une
+fois l'empreinte notée, cette porte est fermée. Pour la fermer aussi à la
+première connexion, il faudrait un vrai certificat, donc un nom de domaine.
+
+Le certificat est valable **10 ans**, volontairement : un renouvellement
+casserait l'épinglage chez les deux joueurs.
 
 ---
 

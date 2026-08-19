@@ -15,29 +15,74 @@
 //
 //  Configuration, par variables d'environnement, sans valeur par défaut
 //  cachée pour le secret :
-//     ECHECS_CODE   le code partagé entre les deux joueurs   (OBLIGATOIRE)
-//     ECHECS_PORT   port d'écoute                            (défaut 8137)
-//     ECHECS_ETAT   fichier d'état JSON                      (défaut ./etat.json)
-//     ECHECS_HOTE   interface d'écoute                       (défaut 0.0.0.0)
+//     ECHECS_CODE     le code partagé entre les deux joueurs   (OBLIGATOIRE)
+//     ECHECS_JOUEURS  les deux seuls noms autorisés, séparés par une virgule
+//                     (facultatif ; s'il est absent, les deux premiers noms
+//                     qui se présentent prennent les places)
+//     ECHECS_CERT     certificat TLS (.pem)   \ les deux ensemble = HTTPS,
+//     ECHECS_CLE      clé privée TLS (.pem)   / l'un sans l'autre = refus
+//     ECHECS_PORT     port d'écoute                            (défaut 8137)
+//     ECHECS_ETAT     fichier d'état JSON                      (défaut ./etat.json)
+//     ECHECS_HOTE     interface d'écoute                       (défaut 0.0.0.0)
 // ===========================================================================
 
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const CODE = process.env.ECHECS_CODE;
 const PORT = parseInt(process.env.ECHECS_PORT || '8137', 10);
 const HOTE = process.env.ECHECS_HOTE || '0.0.0.0';
 const ETAT = process.env.ECHECS_ETAT || path.join(__dirname, 'etat.json');
+const CERT = process.env.ECHECS_CERT || '';
+const CLE  = process.env.ECHECS_CLE  || '';
+
+// Le code est comparé « à la lettre près sauf la casse et les espaces » :
+// « Le Nom Du Vent » et « le nom du vent » sont le même code. Un secret qu'il
+// faut retaper à l'identique se transforme vite en « ça ne marche pas ».
+function normaliserCode(v) {
+  return String(v == null ? '' : v).trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+const CODE = normaliserCode(process.env.ECHECS_CODE);
 
 // Un secret n'a pas de valeur de repli. Démarrer sans code produirait un
 // serveur ouvert à tout Internet, et rien à l'écran ne le dirait.
 if (!CODE || CODE.length < 6) {
   console.error('ECHECS_CODE manquant ou trop court (6 caracteres minimum).');
   process.exit(2);
+}
+
+// Une demi-configuration TLS est plus dangereuse qu'aucune : on refuserait de
+// chiffrer en croyant chiffrer. Mieux vaut ne pas démarrer.
+if ((CERT && !CLE) || (CLE && !CERT)) {
+  console.error('ECHECS_CERT et ECHECS_CLE vont ensemble : fournir les deux, ou aucun.');
+  process.exit(2);
+}
+
+// Liste blanche des joueurs. Avec elle, personne d'autre ne peut prendre une
+// place, même en connaissant le code.
+const JOUEURS = String(process.env.ECHECS_JOUEURS || '')
+  .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+
+if (JOUEURS.length !== 0 && JOUEURS.length !== 2) {
+  console.error('ECHECS_JOUEURS doit contenir exactement deux noms separes par une virgule.');
+  process.exit(2);
+}
+
+// Le nom est reconnu sans tenir compte de la casse, mais c'est TOUJOURS
+// l'orthographe de la liste qui est enregistrée : sinon « dova » et « Dova »
+// deviendraient deux joueurs distincts, avec deux scores distincts.
+function canoniser(nom) {
+  if (JOUEURS.length === 0) return nom;
+  const bas = String(nom || '').trim().toLowerCase();
+  for (let i = 0; i < JOUEURS.length; i++) {
+    if (JOUEURS[i].toLowerCase() === bas) return JOUEURS[i];
+  }
+  return null;   // refusé : ce n'est ni l'un ni l'autre
 }
 
 const CORPS_MAX = 64 * 1024;      // au-delà, la requête est coupée
@@ -48,6 +93,12 @@ const REQ_PAR_MINUTE = 120;       // par adresse IP
 // ---------------------------------------------------------------------------
 
 function etatNeuf(joueurBlanc, joueurNoir, scores) {
+  // Avec une liste blanche, les deux places sont attribuées d'office : plus
+  // aucune étape « rejoindre », donc plus aucune place à voler.
+  if (JOUEURS.length === 2 && (joueurBlanc === 'adversaire' || joueurNoir === 'adversaire')) {
+    joueurBlanc = JOUEURS[0];
+    joueurNoir  = JOUEURS[1];
+  }
   return {
     partieId: new Date().toISOString().replace(/[:.]/g, '-'),
     joueurs: { w: joueurBlanc, b: joueurNoir },
@@ -117,10 +168,9 @@ function tropDeRequetes(ip) {
 }
 
 function codeValide(fourni) {
-  if (typeof fourni !== 'string') return false;
   // Comparaison à temps constant, sur des empreintes de même longueur : une
   // comparaison de chaînes ordinaire fuite la longueur du secret.
-  const a = crypto.createHash('sha256').update(fourni).digest();
+  const a = crypto.createHash('sha256').update(normaliserCode(fourni)).digest();
   const b = crypto.createHash('sha256').update(CODE).digest();
   return crypto.timingSafeEqual(a, b);
 }
@@ -234,7 +284,7 @@ function appliquerScore(e) {
   else if (e.resultat === '1/2-1/2') { e.scores[w] += 0.5; e.scores[b] += 0.5; }
 }
 
-const serveur = http.createServer((req, res) => {
+const gestionnaire = (req, res) => {
   const ip = req.socket.remoteAddress || 'inconnue';
   if (tropDeRequetes(ip)) return repondre(res, 429, { ok: false, erreur: 'trop de requetes' });
   if (req.method !== 'POST') return repondre(res, 404, { ok: false, erreur: 'inconnu' });
@@ -255,14 +305,37 @@ const serveur = http.createServer((req, res) => {
     }
     if (!codeValide(d.code)) return repondre(res, 401, { ok: false, erreur: 'code refuse' });
     if (!nomValide(d.joueur)) return repondre(res, 400, { ok: false, erreur: 'nom de joueur invalide' });
+
+    const canon = canoniser(d.joueur);
+    if (canon === null) {
+      return repondre(res, 403, { ok: false, erreur: 'ce serveur n accepte que deux joueurs, et tu n en fais pas partie' });
+    }
+    d.joueur = canon;
+
     try { traiter(chemin, d, res); } catch (err) {
       console.error('erreur:', err && err.stack ? err.stack : err);
       repondre(res, 500, { ok: false, erreur: 'erreur interne' });
     }
   });
-});
+};
+
+let serveur;
+let schema;
+if (CERT) {
+  serveur = https.createServer({ key: fs.readFileSync(CLE), cert: fs.readFileSync(CERT) }, gestionnaire);
+  schema = 'https';
+} else {
+  serveur = http.createServer(gestionnaire);
+  schema = 'http';
+}
 
 serveur.listen(PORT, HOTE, () => {
-  console.log('echecs-serveur en ecoute sur ' + HOTE + ':' + PORT);
-  console.log('etat : ' + ETAT);
+  console.log('echecs-serveur en ecoute sur ' + schema + '://' + HOTE + ':' + PORT);
+  console.log('etat    : ' + ETAT);
+  console.log('joueurs : ' + (JOUEURS.length ? JOUEURS.join(' et ') : 'les deux premiers qui se presentent'));
+  if (schema === 'http') {
+    // Dit clairement, pas glissé sous le tapis : un repli silencieux vers du
+    // clair est exactement ce qui fait croire qu'on est protégé.
+    console.log('ATTENTION : liaison EN CLAIR (ni ECHECS_CERT ni ECHECS_CLE fournis).');
+  }
 });

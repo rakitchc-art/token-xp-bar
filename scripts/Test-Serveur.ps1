@@ -37,7 +37,10 @@ $ecouteur.Stop()
 $etatFichier = Join-Path $env:TEMP ('echecs-test-' + $port + '.json')
 if (Test-Path $etatFichier) { Remove-Item $etatFichier -Force }
 $code = 'code-de-test-1234'
-$adresse = '127.0.0.1:' + $port
+# http:// explicite : cette suite eprouve la logique de partie, pas le
+# chiffrement (qui a sa propre suite, Test-Epinglage.ps1). Sans le prefixe,
+# le client passerait en https et ne trouverait personne.
+$adresse = 'http://127.0.0.1:' + $port
 
 Write-Host ("Serveur de test sur le port " + $port)
 Write-Host ("Etat jetable : " + $etatFichier)

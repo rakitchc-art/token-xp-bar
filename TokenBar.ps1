@@ -65,7 +65,9 @@ $configPath = Join-Path $scriptDir 'config.json'
 $config = [pscustomobject]@{
     PosRight = -1; PosY = 12; LiveFactor = 1.0
     # Reglages des echecs. Vides = fonctionnalite invisible.
-    EchecsNom = ''; EchecsAdresse = ''; EchecsCode = ''
+    # EchecsEmpreinte : empreinte du certificat du serveur, notee a la
+    # premiere connexion et exigee a l'identique ensuite (voir Client-Serveur).
+    EchecsNom = ''; EchecsAdresse = ''; EchecsCode = ''; EchecsEmpreinte = ''
 }
 if (Test-Path $configPath) {
     try { $s = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -161,12 +163,14 @@ function Update-HauteurFenetre {
 function Invoke-ConnexionEchecs {
     $r = Show-DialogueConnexionEchecs $config (Join-Path $scriptDir 'TokenBar.ico')
     if ($r.Action -eq 'enregistre') {
-        $config.EchecsNom     = $r.Nom
-        $config.EchecsAdresse = $r.Adresse
-        $config.EchecsCode    = $r.Code
+        $config.EchecsNom       = $r.Nom
+        $config.EchecsAdresse   = $r.Adresse
+        $config.EchecsCode      = $r.Code
+        $config.EchecsEmpreinte = [string]$r.Empreinte
         Save-Config
     } elseif ($r.Action -eq 'oublie') {
-        $config.EchecsNom = ''; $config.EchecsAdresse = ''; $config.EchecsCode = ''
+        $config.EchecsNom = ''; $config.EchecsAdresse = ''
+        $config.EchecsCode = ''; $config.EchecsEmpreinte = ''
         Save-Config
     } else { return }
     $script:echecsMonTour = $false

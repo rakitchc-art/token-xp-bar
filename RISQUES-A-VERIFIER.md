@@ -20,14 +20,14 @@ Format d'une entrée :
 **Origine :** le serveur et le client sont vérifiés de bout en bout, mais uniquement contre un serveur local (`127.0.0.1`). Le VPS n'a pas pu être joint : Tailscale est arrêté sur le poste de Dova.
 **Risque :** tout ce qui ne peut se manifester qu'en vrai reste devant nous — port fermé par le pare-feu de l'hébergeur, service qui ne redémarre pas au reboot, latence qui rend le délai de 7 s trop court, adresse publique qui change.
 **À vérifier ou trancher :** relancer Tailscale, déposer le service sur le VPS, ouvrir le port, puis jouer un vrai coup depuis deux machines différentes. Tant que ce parcours n'a pas été joué en réel, la fonctionnalité n'est pas livrée.
-**Statut :** EN SUSPENS.
+**Statut :** PARTIELLEMENT TRANCHÉ le 2026-08-19. Tailscale s'est révélé inutile : le VPS répond sur son IP publique. Le service est déployé, actif, relancé au démarrage, en HTTPS sur 8137 ; `ufw` est inactif et aucun pare-feu d'hébergeur ne bloque le port — vérifié depuis ce poste, pas supposé. Le client s'y connecte réellement, l'épinglage y refuse une mauvaise empreinte et le serveur y refuse un mauvais code. **Reste en suspens :** une partie jouée à deux depuis deux machines différentes.
 
 ## 2026-08-19 — La liaison avec le serveur d'échecs est en clair
 
 **Origine :** décision du 2026-08-19 (service HTTP public + code partagé), prise pour que Nisse n'ait rien à installer.
 **Risque :** le code partagé circule en clair sur Internet. Quiconque observe le réseau entre un joueur et le serveur peut le lire, et donc jouer à la place de l'un des deux. Aucune donnée personnelle n'est en jeu — l'enjeu se limite à la partie d'échecs et à l'écriture dans le fichier d'état du serveur.
 **À vérifier ou trancher :** est-ce que ça reste acceptable ? Si non, deux réponses possibles sans rien changer au client : un reverse-proxy TLS devant le service (Caddy, une ligne de configuration), ou le repli sur Tailscale.
-**Statut :** EN SUSPENS — risque assumé pour l'instant, consigné dans `echecs/LISEZMOI-echecs.md` pour que ce ne soit pas une surprise.
+**Statut :** TRANCHÉ le 2026-08-19 → **non, ce n'était pas acceptable** (décision de Dova). La liaison est désormais en TLS, avec un certificat auto-signé épinglé côté client à la première connexion. Ni le code ni les coups ne circulent en clair. Il reste une porte étroite : le tout premier échange, avant que l'empreinte ne soit notée — elle ne se fermerait qu'avec un vrai certificat, donc un nom de domaine, écarté volontairement. Éprouvé par `scripts/Test-Epinglage.ps1` (27 contrôles, dont le refus effectif d'un certificat qui change).
 
 ## 2026-08-19 — Le code partagé est stocké en clair dans config.json
 

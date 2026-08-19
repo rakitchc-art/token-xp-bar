@@ -9,6 +9,105 @@
 #  Dépend de Moteur-Echecs.ps1 et Partie-Echecs.ps1.
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+#  Épinglage du certificat
+#
+#  Le serveur présente un certificat qu'il a fabriqué lui-même : aucune
+#  autorité ne le reconnaît, donc Windows le refuserait. On applique à la
+#  place la règle de SSH : à la PREMIÈRE connexion on note son empreinte, et
+#  ensuite on refuse tout certificat qui ne serait pas exactement celui-là.
+#
+#  Écrit en C# compilé, et non en bloc PowerShell, parce que ce contrôle est
+#  appelé par la pile réseau depuis un autre fil d'exécution — un bloc
+#  PowerShell y serait au mieux fragile, au pire silencieusement ignoré.
+# ---------------------------------------------------------------------------
+
+if (-not ('EpinglageEchecs' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+
+public static class EpinglageEchecs {
+    public static string HoteAttendu       = "";
+    public static string EmpreinteAttendue = "";
+    public static bool   AutoriserPremiere = false;
+    public static string DerniereEmpreinte = "";
+    public static string DernierRefus      = "";
+
+    public static void Activer() {
+        ServicePointManager.SecurityProtocol =
+            SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
+        ServicePointManager.ServerCertificateValidationCallback =
+            new RemoteCertificateValidationCallback(Verifier);
+    }
+
+    public static string Empreinte(X509Certificate cert) {
+        using (SHA256 sha = SHA256.Create()) {
+            byte[] h = sha.ComputeHash(cert.GetRawCertData());
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < h.Length; i++) { sb.Append(h[i].ToString("X2")); }
+            return sb.ToString();
+        }
+    }
+
+    static bool Verifier(object expediteur, X509Certificate cert,
+                         X509Chain chaine, SslPolicyErrors erreurs) {
+        string hote = "";
+        HttpWebRequest req = expediteur as HttpWebRequest;
+        if (req != null && req.RequestUri != null) { hote = req.RequestUri.Host; }
+
+        // Tout ce qui n'est pas NOTRE serveur garde la validation normale de
+        // Windows : on n'affaiblit rien d'autre dans le processus.
+        if (HoteAttendu.Length == 0 || hote != HoteAttendu) {
+            return erreurs == SslPolicyErrors.None;
+        }
+
+        if (cert == null) { DernierRefus = "aucun certificat presente"; return false; }
+        string vue = Empreinte(cert);
+        DerniereEmpreinte = vue;
+
+        if (EmpreinteAttendue.Length == 0) {
+            if (AutoriserPremiere) { DernierRefus = ""; return true; }
+            DernierRefus = "aucune empreinte enregistree pour ce serveur";
+            return false;
+        }
+        if (string.Equals(vue, EmpreinteAttendue, StringComparison.OrdinalIgnoreCase)) {
+            DernierRefus = "";
+            return true;
+        }
+        DernierRefus = "le certificat du serveur a CHANGE";
+        return false;
+    }
+}
+'@
+}
+
+function Set-EpinglageEchecs {
+    param([string]$Hote, [string]$Empreinte = '', [bool]$AutoriserPremiere = $false)
+    [EpinglageEchecs]::HoteAttendu       = [string]$Hote
+    [EpinglageEchecs]::EmpreinteAttendue = [string]$Empreinte
+    [EpinglageEchecs]::AutoriserPremiere = $AutoriserPremiere
+    [EpinglageEchecs]::DerniereEmpreinte = ''
+    [EpinglageEchecs]::DernierRefus      = ''
+    [EpinglageEchecs]::Activer()
+}
+
+function Get-EmpreinteVue    { return [string][EpinglageEchecs]::DerniereEmpreinte }
+function Get-RefusEpinglage  { return [string][EpinglageEchecs]::DernierRefus }
+
+function ConvertTo-CodeNormalise {
+    # Même règle que le serveur : la casse et les espaces en trop ne comptent
+    # pas. « Le Nom Du Vent » et « le nom du vent » sont le même code.
+    param([string]$Code)
+    $t = ([string]$Code).Trim()
+    $t = [System.Text.RegularExpressions.Regex]::Replace($t, '\s+', ' ')
+    return $t.ToLowerInvariant()
+}
+
 function ConvertTo-AdresseServeur {
     # Accepte ce qu'un humain tape : « 12.34.56.78 », « 12.34.56.78:8137 »,
     # « http://mondomaine.fr/echecs ». Renvoie une base d'URL utilisable.
@@ -16,7 +115,9 @@ function ConvertTo-AdresseServeur {
 
     $t = ($Saisie + '').Trim()
     if (-not $t) { return '' }
-    if ($t -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $t = 'http://' + $t }
+    # https par défaut : la liaison est chiffrée sauf mention contraire
+    # explicite. Un défaut en clair serait une protection qu'on croit avoir.
+    if ($t -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $t = 'https://' + $t }
     try { $u = [uri]$t } catch { return '' }
     if (-not $u.Host) { return '' }
 
@@ -37,21 +138,29 @@ function Invoke-ServeurEchecs {
         [string]$Joueur,
         [string]$Route,
         [hashtable]$Corps = @{},
-        [int]$Delai = 8
+        [int]$Delai = 8,
+        [string]$Empreinte = '',
+        [switch]$AutoriserPremiere
     )
 
     $base = ConvertTo-AdresseServeur $Adresse
     if (-not $base) { return @{ Ok = $false; Erreur = 'Adresse de serveur illisible.' } }
 
-    $charge = @{ code = $Code; joueur = $Joueur }
+    $hote = ([uri]$base).Host
+    Set-EpinglageEchecs -Hote $hote -Empreinte $Empreinte -AutoriserPremiere ([bool]$AutoriserPremiere)
+
+    $charge = @{ code = (ConvertTo-CodeNormalise $Code); joueur = $Joueur }
     foreach ($k in $Corps.Keys) { $charge[$k] = $Corps[$k] }
     $json = ($charge | ConvertTo-Json -Compress -Depth 5)
 
     try {
+        # -DisableKeepAlive : sans lui, .NET reutilise une connexion TLS deja
+        # ouverte et le controle du certificat n'est PAS rejoue. L'epinglage
+        # deviendrait alors une verification unique au premier appel.
         $r = Invoke-RestMethod -Uri ($base + $Route) -Method Post -Body $json `
                                -ContentType 'application/json; charset=utf-8' `
-                               -TimeoutSec $Delai -ErrorAction Stop
-        return @{ Ok = $true; Etat = $r.etat; Reponse = $r }
+                               -TimeoutSec $Delai -DisableKeepAlive -ErrorAction Stop
+        return @{ Ok = $true; Etat = $r.etat; Reponse = $r; EmpreinteVue = (Get-EmpreinteVue) }
     } catch {
         # Le serveur explique ses refus dans le corps de la réponse ; le laisser
         # tomber transformerait « ce n'est pas ton tour » en « (409) Conflit ».
@@ -84,7 +193,20 @@ function Invoke-ServeurEchecs {
                 if ($o.etat)   { $etat = $o.etat }
             } catch { }
         }
-        return @{ Ok = $false; Erreur = $detail; CodeHttp = $codeHttp; Etat = $etat }
+        # Un refus d'epinglage remonte sous la forme « relation de confiance
+        # impossible a etablir », qui n'apprend rien. On y substitue la vraie
+        # raison, sinon un certificat qui change ressemble a une panne reseau.
+        $refus = Get-RefusEpinglage
+        if ($refus) {
+            $detail = "Certificat refuse : $refus."
+            if ($refus -like '*CHANGE*') {
+                $detail += " Soit le serveur a ete reinstalle, soit quelqu'un s'interpose." +
+                           " Empreinte vue : " + (Get-EmpreinteVue) + "."
+            }
+        }
+
+        return @{ Ok = $false; Erreur = $detail; CodeHttp = $codeHttp; Etat = $etat
+                  EmpreinteVue = (Get-EmpreinteVue); RefusEpinglage = $refus }
     }
 }
 
@@ -137,13 +259,13 @@ function Send-CoupServeur {
     # Envoie un coup, puis resynchronise la partie sur ce que le serveur a
     # réellement enregistré — jamais sur ce qu'on croit avoir envoyé.
     param($Partie, [string]$Adresse, [string]$Code, [string]$MonNom,
-          [string]$CoupUci, [int]$AvantVersion)
+          [string]$CoupUci, [int]$AvantVersion, [string]$Empreinte = '')
 
     $corps = @{ coup = $CoupUci; apresVersion = $AvantVersion }
     if ($Partie.Resultat) { $corps['resultat'] = $Partie.Resultat }
 
     $r = Invoke-ServeurEchecs -Adresse $Adresse -Code $Code -Joueur $MonNom `
-                              -Route '/coup' -Corps $corps
+                              -Route '/coup' -Corps $corps -Empreinte $Empreinte
     if (-not $r.Ok) {
         # Même en cas de refus, le serveur renvoie l'état courant : on s'y
         # recale, sinon le joueur reste devant une position qui n'existe pas.

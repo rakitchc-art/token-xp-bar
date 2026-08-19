@@ -15,6 +15,20 @@ Format d'une entrée :
 
 ---
 
+## 2026-08-19 — Liaison chiffrée par certificat auto-signé, épinglé à la première connexion
+
+**Décision :** le serveur présente un certificat qu'il fabrique lui-même, valable 10 ans. TokenBar note son empreinte SHA-256 à la première connexion et refuse ensuite tout certificat différent — la règle de SSH. Seul le dialogue de connexion, quand quelqu'un est devant l'écran, a le droit d'accepter un certificat inconnu ; le sondage de fond ne l'a jamais.
+**Raison :** Dova a demandé que la liaison soit sécurisée (2026-08-19). Un vrai certificat reconnu exigerait un nom de domaine — un achat, une configuration DNS et un renouvellement à surveiller. L'épinglage donne la même protection contre l'écoute et contre l'interception, sans rien acheter et sans rien à renouveler. La validité de 10 ans est délibérée : un renouvellement casserait l'épinglage chez les deux joueurs.
+**Alternatives écartées :** HTTPS classique avec nom de domaine (coût récurrent, DNS, service supplémentaire) ; chiffrement applicatif avec une clé dérivée du code partagé (permettrait une attaque hors ligne sur une phrase secrète courte, et revient à assembler soi-même de la cryptographie là où TLS existe) ; Tailscale (Nisse devrait installer un client).
+**Ce qui invaliderait ce choix :** l'achat d'un nom de domaine, qui rendrait Let's Encrypt possible et fermerait la fenêtre de la toute première connexion. Ou une réinstallation du serveur : le certificat changerait, et les deux joueurs devraient refaire « Oublier » puis reconfigurer.
+
+## 2026-08-19 — Seuls deux joueurs nommés peuvent jouer
+
+**Décision :** le serveur reçoit la liste des deux noms autorisés (`ECHECS_JOUEURS`). Les deux places sont attribuées d'office, et tout autre nom est refusé même avec le bon code. Le nom est reconnu sans tenir compte de la casse, mais c'est toujours l'orthographe de la liste qui est enregistrée.
+**Raison :** demande de Dova — « on ne peut jouer qu'entre nous ». Sans liste, le code seul suffisait à prendre une place libre. La normalisation de casse évite qu'une faute de frappe crée un troisième joueur avec son propre score.
+**Alternatives écartées :** s'en remettre au seul code partagé (une place libre restait prenable) ; comptes et mots de passe individuels (démesuré pour deux personnes).
+**Ce qui invaliderait ce choix :** vouloir jouer à plus de deux, ou plusieurs parties en parallèle.
+
 ## 2026-08-19 — Le serveur ignore les règles des échecs
 
 **Décision :** le serveur tient une liste ordonnée de coups et arbitre uniquement à qui c'est le tour (par la parité du nombre de coups). Il ne sait ni ce qu'est un roque ni ce qu'est un mat. Les règles sont vérifiées par les deux clients, qui **rejouent** la liste reçue dans leur propre moteur avant de l'afficher.
