@@ -35,6 +35,15 @@ public class FgWin {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 . (Join-Path $scriptDir 'Get-TokenUsage.ps1')
 
+# Le jeu d'echecs. Ne se manifeste que si un serveur a ete enregistre ; sinon
+# ce chargement ne fait qu'ajouter des fonctions inutilisees. Absent du dossier
+# (vieille installation), la barre continue de fonctionner sans lui.
+$script:echecsDispo = $false
+$echecsScript = Join-Path $scriptDir 'echecs\Integration-TokenBar.ps1'
+if (Test-Path $echecsScript) {
+    try { . $echecsScript; $script:echecsDispo = $true } catch { $script:echecsDispo = $false }
+}
+
 # --- Calcul en ARRIERE-PLAN ---------------------------------------------------
 # Get-TokenUsage lit les .jsonl de la fenetre de 5h (cache incremental cote
 # fichier -> ne relit que ce qui a ete ajoute depuis le dernier appel) : meme
@@ -53,15 +62,27 @@ $script:bgHandle = $null
 
 # --- Configuration ----------------------------------------------------------
 $configPath = Join-Path $scriptDir 'config.json'
-$config = [pscustomobject]@{ PosRight = -1; PosY = 12; LiveFactor = 1.0 }
+$config = [pscustomobject]@{
+    PosRight = -1; PosY = 12; LiveFactor = 1.0
+    # Reglages des echecs. Vides = fonctionnalite invisible.
+    EchecsNom = ''; EchecsAdresse = ''; EchecsCode = ''
+}
 if (Test-Path $configPath) {
     try { $s = Get-Content $configPath -Raw | ConvertFrom-Json
-          foreach ($p in $s.PSObject.Properties) { $config.$($p.Name) = $p.Value } } catch { }
+          $connus = $config.PSObject.Properties.Name
+          foreach ($p in $s.PSObject.Properties) {
+              # Une cle inconnue faisait planter l'affectation, donc la boucle,
+              # donc TOUTES les cles suivantes -- en silence, dans le catch.
+              if ($connus -contains $p.Name) { $config.$($p.Name) = $p.Value }
+          } } catch { }
 }
 function Save-Config { $config | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8 }
 
 # --- Dimensions -------------------------------------------------------------
-$W = 208; $H = 20
+# $HB = hauteur de la BARRE elle-meme (inchangee depuis toujours).
+# $H  = hauteur de la FENETRE : elle s'allonge vers le bas quand le pion des
+#       echecs doit tenir sous le pourcentage. La barre, elle, ne bouge pas.
+$W = 208; $HB = 20; $H = $HB
 $KEY = [System.Drawing.Color]::FromArgb(31, 31, 34)
 $TXTFLAGS = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor `
             [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor `
@@ -72,10 +93,16 @@ $HEART = @('011000110','122101221','132222221','132222221','012222210','00122210
 
 # Geometrie de la barre (partagee entre le dessin et la detection de survol,
 # pour que la zone survolable corresponde exactement a la forme visible).
-$script:BX = 24.0; $script:BH = 12.0; $script:BY = ([single]$H - $script:BH) / 2
+$script:BX = 24.0; $script:BH = 12.0; $script:BY = ([single]$HB - $script:BH) / 2
 $script:BW = [single]$W - 24.0 - 44.0; $script:RAD = $script:BH / 2
 $script:HeartRect = New-Object System.Drawing.Rectangle 2, 2, 18, 16
-$script:PctRect    = New-Object System.Drawing.Rectangle ([int]($W - 44)), 0, 42, $H
+$script:PctRect    = New-Object System.Drawing.Rectangle ([int]($W - 44)), 0, 42, $HB
+
+# Le pion des echecs : 9 x 8 cellules de 2 px, centre sous le pourcentage.
+$script:PionCell = 2.0
+$script:PionRect = New-Object System.Drawing.Rectangle `
+    ([int]($W - 44 + (42 - 18) / 2)), ($HB + 2), 18, 16
+$script:HEchecs  = $script:PionRect.Bottom + 2       # hauteur de fenetre quand le jeu est la
 
 function New-RoundedPath([single]$x,[single]$y,[single]$w,[single]$h,[single]$r) {
     $d = $r*2; if ($d -gt $h) { $d = $h }; if ($d -gt $w) { $d = $w }
@@ -122,6 +149,32 @@ $panel.GetType().GetProperty('DoubleBuffered',
     [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic
 ).SetValue($panel, $true, $null)
 
+# --- Echecs : hauteur de la fenetre et porte d'entree cachee -----------------
+function Update-HauteurFenetre {
+    # La fenetre s'allonge vers le BAS pour loger le pion : la barre elle-meme
+    # ne bouge pas d'un pixel, et la zone ajoutee est transparente.
+    $voulu = $HB
+    if ($script:echecsDispo -and (Test-EchecsConfigure $config)) { $voulu = $script:HEchecs }
+    if ($form.Height -ne $voulu) { $form.Height = $voulu }
+}
+
+function Invoke-ConnexionEchecs {
+    $r = Show-DialogueConnexionEchecs $config (Join-Path $scriptDir 'TokenBar.ico')
+    if ($r.Action -eq 'enregistre') {
+        $config.EchecsNom     = $r.Nom
+        $config.EchecsAdresse = $r.Adresse
+        $config.EchecsCode    = $r.Code
+        Save-Config
+    } elseif ($r.Action -eq 'oublie') {
+        $config.EchecsNom = ''; $config.EchecsAdresse = ''; $config.EchecsCode = ''
+        Save-Config
+    } else { return }
+    $script:echecsMonTour = $false
+    Update-HauteurFenetre
+    $panel.Invalidate()
+    Start-EchecsPoll $config $scriptDir
+}
+
 $script:ratio           = 0.0
 $script:pctText         = '···'
 $script:resetText       = '?'
@@ -166,8 +219,8 @@ $panel.Add_Paint({
     $g.DrawPath($ol,$outer)
 
     $font=New-Object System.Drawing.Font 'Segoe UI',9.5,([System.Drawing.FontStyle]::Bold)
-    $rc=New-Object System.Drawing.Rectangle ([int]($W-44)),0,42,$H
-    $rcSh=New-Object System.Drawing.Rectangle ([int]($W-44)+1),1,42,$H
+    $rc=New-Object System.Drawing.Rectangle ([int]($W-44)),0,42,$HB
+    $rcSh=New-Object System.Drawing.Rectangle ([int]($W-44)+1),1,42,$HB
     [System.Windows.Forms.TextRenderer]::DrawText($g,$script:pctText,$font,$rcSh,([System.Drawing.Color]::FromArgb(0,0,0)),$TXTFLAGS)
     [System.Windows.Forms.TextRenderer]::DrawText($g,$script:pctText,$font,$rc,([System.Drawing.Color]::White),$TXTFLAGS)
 
@@ -175,12 +228,18 @@ $panel.Add_Paint({
         $ob=New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(210,20,20,22))
         $g.FillPath($ob,$outer); $ob.Dispose()
         $g.DrawPath($ol,$outer)                  # contour redessine par-dessus (net)
-        $rf=New-Object System.Drawing.Rectangle ([int]$bx),0,([int]$bw),$H
+        $rf=New-Object System.Drawing.Rectangle ([int]$bx),0,([int]$bw),$HB
         $hoverFont = if ($script:weeklyText) { New-Object System.Drawing.Font 'Segoe UI',8.5,([System.Drawing.FontStyle]::Bold) } else { $font }
         $hoverLine = if ($script:weeklyText) { "$script:resetText  ·  $script:weeklyText" } else { $script:resetText }
         [System.Windows.Forms.TextRenderer]::DrawText($g,$hoverLine,$hoverFont,$rf,([System.Drawing.Color]::FromArgb(238,238,238)),$TXTFLAGS)
         if ($script:weeklyText) { $hoverFont.Dispose() }
     }
+    # Le pion des echecs, sous le pourcentage. Il n'existe que si un serveur a
+    # ete enregistre : sans ca, la barre est exactement celle d'avant.
+    if ($script:echecsDispo -and (Test-EchecsConfigure $config)) {
+        Write-PixelPion $g $script:PionRect.X $script:PionRect.Y $script:PionCell $script:echecsMonTour
+    }
+
     $ol.Dispose(); $outer.Dispose(); $font.Dispose()
 })
 
@@ -226,8 +285,35 @@ function Start-BgUpdate {
 
 # --- Deplacement + clic = rafraichir ----------------------------------------
 $script:drag = $false; $script:moved = $false; $script:dragOff = New-Object System.Drawing.Point 0,0
+
+# Le geste cache : Ctrl + Maj enfonces, puis DOUBLE-CLIC sur le coeur. Detecte
+# a la main plutot que par l'evenement DoubleClick, qui depend d'un style de
+# controle que rien ne garantit sur un Panel.
+$script:coeurClics = 0
+$script:coeurDernier = [datetime]::MinValue
+
 $panel.Add_MouseDown({ param($s,$e)
-    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { $script:drag = $true; $script:moved = $false; $script:dragOff = $e.Location }
+    if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+
+    if ($script:echecsDispo -and $script:HeartRect.Contains($e.Location)) {
+        $mods = [System.Windows.Forms.Control]::ModifierKeys
+        $ctrl = (($mods -band [System.Windows.Forms.Keys]::Control) -ne 0)
+        $maj  = (($mods -band [System.Windows.Forms.Keys]::Shift)   -ne 0)
+        if ($ctrl -and $maj) {
+            $now = Get-Date
+            if (($now - $script:coeurDernier).TotalMilliseconds -lt 700) { $script:coeurClics++ }
+            else { $script:coeurClics = 1 }
+            $script:coeurDernier = $now
+            if ($script:coeurClics -ge 2) {
+                $script:coeurClics = 0
+                $script:drag = $false
+                Invoke-ConnexionEchecs
+                return
+            }
+        }
+    }
+
+    $script:drag = $true; $script:moved = $false; $script:dragOff = $e.Location
 })
 $panel.Add_MouseMove({ param($s,$e)
     if ($script:drag) {
@@ -240,6 +326,8 @@ $panel.Add_MouseUp({ param($s,$e)
     if ($script:drag) {
         $script:drag = $false
         if ($script:moved) { $config.PosRight = $form.Left + $form.Width; $config.PosY = $form.Top; Save-Config }
+        elseif ($script:echecsDispo -and (Test-EchecsConfigure $config) -and
+                $script:PionRect.Contains($e.Location)) { Open-FenetreEchecs $config $scriptDir }
         else { Start-BgUpdate }
     }
 })
@@ -274,6 +362,15 @@ $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 $timer.Add_Tick({
     $script:tick++
+
+    # Sondage des echecs : toutes les 30 s au repos, toutes les 5 s quand la
+    # fenetre de jeu est ouverte (on veut voir le coup de l'adversaire vite).
+    if ($script:echecsDispo -and (Test-EchecsConfigure $config)) {
+        $periode = 30
+        if ($script:echecsFenetre -and -not $script:echecsFenetre.Form.IsDisposed) { $periode = 5 }
+        if (($script:tick % $periode) -eq 0) { Start-EchecsPoll $config $scriptDir }
+    }
+
     try {
         $lw = (Get-Item $mainCfgPath -ErrorAction Stop).LastWriteTimeUtc
         if ($lw -ne $script:lastWrite) { $script:lastWrite = $lw; Start-BgUpdate; return }  # re-calage instantane sur l'officiel
@@ -297,6 +394,12 @@ $pollTimer.Add_Tick({
             if ($result) { Apply-Usage $result[0] }
         } catch { }
         finally { $script:bgPs.Dispose(); $script:bgPs = $null; $script:bgHandle = $null }
+    }
+    # Meme mecanique pour les echecs : on ramasse le resultat quand il est
+    # pret, sans jamais attendre le reseau sur le fil de l'interface.
+    if ($script:echecsDispo -and (Complete-EchecsPoll)) {
+        Sync-FenetreEchecsOuverte $config
+        $panel.Invalidate()
     }
 })
 $pollTimer.Start()
@@ -328,6 +431,7 @@ $hoverTimer.Start()
 # secondes de lecture) : la fenetre s'affiche tout de suite avec "..." et se
 # met a jour des que le resultat arrive (pollTimer), sans jamais geler l'UI.
 Start-BgUpdate
+if ($script:echecsDispo) { Update-HauteurFenetre; Start-EchecsPoll $config $scriptDir }
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $form.Add_Shown({ Sync-Visibility })
 $form.Add_FormClosed({ try { $script:bgPs.Dispose() } catch {}; try { $script:bgRunspace.Close(); $script:bgRunspace.Dispose() } catch {} })

@@ -15,6 +15,20 @@ Format d'une entrée :
 
 ---
 
+## 2026-08-19 — Le serveur ignore les règles des échecs
+
+**Décision :** le serveur tient une liste ordonnée de coups et arbitre uniquement à qui c'est le tour (par la parité du nombre de coups). Il ne sait ni ce qu'est un roque ni ce qu'est un mat. Les règles sont vérifiées par les deux clients, qui **rejouent** la liste reçue dans leur propre moteur avant de l'afficher.
+**Raison :** écrire un second moteur d'échecs en JavaScript obligerait à maintenir deux implémentations en accord parfait ; la première divergence produirait des parties impossibles à débloquer. Le rejeu donne en prime une garantie forte : une liste contenant l'impossible est refusée en bloc, avec un message clair, plutôt que d'aboutir à un échiquier faux. Éprouvé en sabotant à la main le fichier d'état du serveur.
+**Alternatives écartées :** moteur complet côté serveur (deux implémentations à synchroniser) ; serveur qui fait confiance au client sans rejeu côté réception (un état corrompu s'afficherait comme s'il était valide).
+**Ce qui invaliderait ce choix :** l'arrivée d'un troisième client écrit dans une autre langue, ou un besoin d'arbitrage que la parité ne suffit plus à trancher.
+
+## 2026-08-19 — Notation affichée en français, notation stockée en anglais
+
+**Décision :** la liste des coups affiche `Cf3`, `Fc4`, `Dh4#` (Cavalier, Fou, Dame). En interne et sur le réseau, tout reste en notation UCI, neutre (`g1f3`, `d8h4`).
+**Raison :** l'interface est entièrement en français ; afficher `Nf3` y détonne. Mais mélanger les deux dans le stockage rendrait une partie enregistrée illisible par n'importe quel autre outil d'échecs.
+**Alternatives écartées :** tout en anglais (incohérent avec le reste de l'interface) ; tout en français y compris sur le réseau (partie non réutilisable ailleurs).
+**Ce qui invaliderait ce choix :** un joueur qui préférerait la notation anglaise — ce serait alors un réglage, pas un changement de stockage.
+
 ## 2026-08-19 — Le jeu d'échecs vit DANS TokenBar, pas à côté
 
 **Décision :** la fonctionnalité échecs est une extension de TokenBar (même dépôt, même installateur, même processus PowerShell), pas une application séparée.

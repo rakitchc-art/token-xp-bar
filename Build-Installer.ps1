@@ -1,38 +1,52 @@
 # ============================================================================
 #  Build-Installer.ps1
 #  ---------------------------------------------------------------------------
-#  Empaquette TokenBar.ps1, Get-TokenUsage.ps1, Start-TokenBar.vbs et
-#  TokenBar.ico dans UN SEUL fichier : TokenBar-Installer.bat.
+#  Empaquette tous les fichiers de TokenBar dans UN SEUL fichier :
+#  TokenBar-Installer.bat.
 #
 #  Technique : polyglotte batch/PowerShell. Les toutes premieres lignes sont
 #  un script .bat valide qui s'auto-extrait (via "more +N") a partir de sa
 #  propre ligne N+1 vers un .ps1 temporaire, puis l'execute. Tout ce qui suit
 #  ces lignes d'en-tete est du PowerShell pur (jamais lu par cmd.exe, qui
-#  quitte avant via "exit /b"). Le contenu des 4 fichiers sources est
-#  embarque en base64 (aucun souci d'echappement : uniquement des
-#  caracteres A-Z/a-z/0-9/+//=).
+#  quitte avant via "exit /b").
 #
-#  A relancer a chaque fois que les fichiers sources changent -- ce script
-#  est la seule chose a maintenir a la main, TokenBar-Installer.bat est un
-#  ARTEFACT GENERE, jamais edite directement.
+#  Chaque fichier est embarque en base64 de ses OCTETS BRUTS, jamais de son
+#  texte decode : c'est ce qui garantit que les accents et les marques d'ordre
+#  d'octets (BOM) arrivent intacts. Un aller-retour decodage/reencodage
+#  suffirait a transformer un "e" accentue en deux caracteres, ou a perdre le
+#  BOM sans lequel PowerShell 5.1 lit un .ps1 accentue comme de l'ANSI.
+#
+#  A RELANCER a chaque fois qu'un fichier source change : TokenBar-Installer.bat
+#  est un ARTEFACT GENERE, jamais edite a la main.
 # ============================================================================
 
 $ErrorActionPreference = 'Stop'
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-function Get-B64Text([string]$path) {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes((Get-Content -Raw -Path $path))
-    return [Convert]::ToBase64String($bytes)
-}
-function Get-B64Bin([string]$path) {
-    return [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
-}
+# Chemins RELATIFS : ils sont recrees tels quels dans le dossier d'installation.
+$fichiers = @(
+    'TokenBar.ps1',
+    'Get-TokenUsage.ps1',
+    'Start-TokenBar.vbs',
+    'Install-Autostart.ps1',
+    'TokenBar.ico',
+    'echecs\Moteur-Echecs.ps1',
+    'echecs\Rendu-Echiquier.ps1',
+    'echecs\Partie-Echecs.ps1',
+    'echecs\Client-Serveur.ps1',
+    'echecs\Fenetre-Echecs.ps1',
+    'echecs\Integration-TokenBar.ps1',
+    'echecs\LISEZMOI-echecs.md',
+    'serveur\echecs-serveur.js'
+)
 
-$b64TokenBar  = Get-B64Text (Join-Path $dir 'TokenBar.ps1')
-$b64Usage     = Get-B64Text (Join-Path $dir 'Get-TokenUsage.ps1')
-$b64Vbs       = Get-B64Text (Join-Path $dir 'Start-TokenBar.vbs')
-$b64Autostart = Get-B64Text (Join-Path $dir 'Install-Autostart.ps1')
-$b64Ico       = Get-B64Bin  (Join-Path $dir 'TokenBar.ico')
+$lignesEcriture = @()
+foreach ($rel in $fichiers) {
+    $complet = Join-Path $dir $rel
+    if (-not (Test-Path $complet)) { throw ("Fichier source introuvable : " + $rel) }
+    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($complet))
+    $lignesEcriture += ("Write-Fichier '" + $rel + "' '" + $b64 + "'")
+}
 
 # ---- En-tete .bat (nombre de lignes CONNU -> calcule le "more +N") --------
 $header = @(
@@ -55,20 +69,14 @@ $ErrorActionPreference = 'Stop'
 $dest = Join-Path $env:LOCALAPPDATA 'TokenBar'
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-function Write-EmbeddedText([string]$relPath, [string]$b64) {
-    $text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
-    $utf8Bom = New-Object System.Text.UTF8Encoding $true
-    [IO.File]::WriteAllText((Join-Path $dest $relPath), $text, $utf8Bom)
-}
-function Write-EmbeddedBinary([string]$relPath, [string]$b64) {
-    [IO.File]::WriteAllBytes((Join-Path $dest $relPath), [Convert]::FromBase64String($b64))
+function Write-Fichier([string]$relPath, [string]$b64) {
+    $cible = Join-Path $dest $relPath
+    $dossier = Split-Path -Parent $cible
+    if (-not (Test-Path $dossier)) { New-Item -ItemType Directory -Force -Path $dossier | Out-Null }
+    [IO.File]::WriteAllBytes($cible, [Convert]::FromBase64String($b64))
 }
 
-Write-EmbeddedText   'TokenBar.ps1'          '__B64_TOKENBAR__'
-Write-EmbeddedText   'Get-TokenUsage.ps1'    '__B64_USAGE__'
-Write-EmbeddedText   'Start-TokenBar.vbs'    '__B64_VBS__'
-Write-EmbeddedText   'Install-Autostart.ps1' '__B64_AUTOSTART__'
-Write-EmbeddedBinary 'TokenBar.ico'          '__B64_ICO__'
+__ECRITURES__
 
 $vbs = Join-Path $dest 'Start-TokenBar.vbs'
 $ico = Join-Path $dest 'TokenBar.ico'
@@ -98,16 +106,13 @@ Write-Host ""
 Read-Host "  Appuie sur Entree pour fermer cette fenetre"
 '@
 
-$payload = $payload.Replace('__B64_TOKENBAR__', $b64TokenBar)
-$payload = $payload.Replace('__B64_USAGE__', $b64Usage)
-$payload = $payload.Replace('__B64_VBS__', $b64Vbs)
-$payload = $payload.Replace('__B64_AUTOSTART__', $b64Autostart)
-$payload = $payload.Replace('__B64_ICO__', $b64Ico)
+$payload = $payload.Replace('__ECRITURES__', ($lignesEcriture -join "`r`n"))
 
 $payloadLines = $payload -split "`r?`n"
 $allLines = @($header) + @($payloadLines)
 $outPath = Join-Path $dir 'TokenBar-Installer.bat'
 [IO.File]::WriteAllText($outPath, ($allLines -join "`r`n") + "`r`n", (New-Object System.Text.UTF8Encoding $false))
 
-Write-Output "Installateur genere : $outPath"
-Write-Output ("Taille : {0:N0} Ko" -f ((Get-Item $outPath).Length / 1KB))
+Write-Output ("Installateur genere : " + $outPath)
+Write-Output ("Fichiers embarques  : " + $fichiers.Count)
+Write-Output ("Taille              : {0:N0} Ko" -f ((Get-Item $outPath).Length / 1KB))
