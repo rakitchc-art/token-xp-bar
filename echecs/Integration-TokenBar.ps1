@@ -205,6 +205,8 @@ $script:echecsNom      = ''
 $script:echecsMonTour  = $false
 $script:echecsErreur   = ''
 $script:echecsPartie   = $null
+# Coup joue localement mais dont on ignore s'il est arrive au serveur.
+$script:echecsCoupEnAttente = $null
 
 function Initialize-EchecsRunspace {
     param([string]$Dossier)
@@ -289,21 +291,55 @@ function Complete-EchecsPoll {
             if ($r.Ok -and $r.Etat) {
                 $script:echecsEtat   = $r.Etat
                 $script:echecsErreur = ''
+                if ($tache -and $tache.Route -eq '/coup') { $script:echecsCoupEnAttente = $null }
                 $redessiner = (Sync-PartieBarre $Config)
+                # Un coup reste en attente : l'etat qu'on vient de lire dit
+                # s'il est arrive ou non. Sync-PartieBarre a deja tranche.
+                if ($script:echecsCoupEnAttente -and $tache -and $tache.Route -eq '/etat') {
+                    $enAttente = $script:echecsCoupEnAttente
+                    $nb = 0
+                    if ($r.Etat.coups) { $nb = @($r.Etat.coups).Count }
+                    if ($nb -gt [int]$enAttente.Corps.apresVersion) {
+                        $script:echecsCoupEnAttente = $null    # il etait bien passe
+                    } else {
+                        # Remis en tete TEL QUEL : recreer la tache perdrait le
+                        # compteur d'essais et on reessaierait sans fin.
+                        $script:echecsFile.Insert(0, $enAttente)
+                    }
+                }
             } else {
                 $script:echecsErreur = [string]$r.Erreur
-                # Un refus du serveur n'est pas un incident réseau : la
-                # position affichée est fausse, il faut la recaler ET le dire.
+                $redessiner = $true
+
+                # AUCUNE boîte de dialogue ici. Une coupure réseau se répète
+                # toutes les cinq secondes : la première version en empilait
+                # une par échec, jusqu'à une trentaine à l'écran. Le problème
+                # se signale par la couleur de la flèche, et le coup est
+                # simplement RÉESSAYÉ.
                 if ($r.Etat) {
                     $script:echecsEtat = $r.Etat
                     [void](Sync-PartieBarre $Config)
-                    $redessiner = $true
                 }
-                if ($tache -and $tache.Route -ne '/etat') {
-                    [void][System.Windows.Forms.MessageBox]::Show(
-                        ("Le serveur a refuse :`r`n`r`n" + $r.Erreur +
-                         "`r`n`r`nLe plateau a ete remis a l'etat du serveur."),
-                        'Echecs', 'OK', 'Warning')
+
+                if ($tache -and $tache.Route -eq '/coup') {
+                    # CodeHttp à 0 = on n'a pas eu de réponse du tout (délai
+                    # dépassé, coupure). Le coup est peut-être passé, peut-être
+                    # pas : on redemande l'état, et Sync-PartieBarre décidera
+                    # s'il faut le renvoyer. Un code 4xx, lui, est un refus
+                    # ferme : inutile d'insister.
+                    if ([int]$r.CodeHttp -eq 0 -and $tache.Essais -lt 4) {
+                        $tache.Essais = [int]$tache.Essais + 1
+                        $script:echecsCoupEnAttente = $tache
+                        Add-TacheEchecs '/etat' @{} $true
+                    } else {
+                        # On renonce. La partie locale contient peut-etre un
+                        # coup fantome que le serveur n'a jamais recu : on la
+                        # jette pour qu'elle soit reconstruite depuis le
+                        # serveur, plutot que de laisser un echiquier faux.
+                        $script:echecsCoupEnAttente = $null
+                        Reset-PartieBarre
+                        Add-TacheEchecs '/etat' @{} $true
+                    }
                 }
             }
         }

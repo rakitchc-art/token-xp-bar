@@ -24,9 +24,7 @@
 $script:PLATEAU_MIN    = 160     # côté minimal du damier, en pixels
 $script:PLATEAU_MAX    = 1200
 $script:PLATEAU_DEFAUT = 232     # « un carré un peu plus large que la barre »
-$script:PLATEAU_BORD   = 6       # cadre sur trois côtés
-$script:PLATEAU_BAS    = 15      # bande du bas, plus haute : elle loge la poignée
-$script:POIGNEE        = 15      # côté de la zone de redimensionnement
+$script:POIGNEE        = 13      # côté de la zone de redimensionnement
 
 $script:echecsOuvert    = $false
 $script:echecsTaille    = $script:PLATEAU_DEFAUT
@@ -51,7 +49,7 @@ function Get-GeometrieEchecs {
         # pas toutes la même épaisseur, ce qui saute aux yeux.
         $case = [int][math]::Max(20, [math]::Floor($script:echecsTaille / 8))
         $cote = $case * 8
-        $lFen = [int][math]::Max($LargeurBarre, ($cote + 2 * $script:PLATEAU_BORD))
+        $lFen = [int][math]::Max($LargeurBarre, $cote)
     } else {
         $case = 0; $cote = 0; $lFen = $LargeurBarre
     }
@@ -73,18 +71,18 @@ function Get-GeometrieEchecs {
         return $g
     }
 
+    # Aucun cadre : la fenêtre fait exactement la taille du damier. On ne voit
+    # que le plateau. L'état de la partie est porté par un liseré peint SUR le
+    # bord du damier, pas par une bande autour.
     $g.Case           = $case
     $g.Cote           = $cote
-    $g.HauteurFenetre = $g.HauteurFerme + $cote + $script:PLATEAU_BORD + $script:PLATEAU_BAS
-    $g.PlateauX       = $lFen - $script:PLATEAU_BORD - $cote
-    $g.PlateauY       = $g.HauteurFerme + $script:PLATEAU_BORD
-    $g.Cadre = New-Object System.Drawing.Rectangle `
-        ($g.PlateauX - $script:PLATEAU_BORD), $g.HauteurFerme, `
-        ($cote + 2 * $script:PLATEAU_BORD), ($cote + $script:PLATEAU_BORD + $script:PLATEAU_BAS)
-    # Poignée en bas à GAUCHE, et entièrement DANS la bande du bas : le plateau
-    # ne peut grandir que vers la gauche et vers le bas (la barre est ancrée au
-    # bord droit de l'écran), et aucun clic de redimensionnement ne doit tomber
-    # sur une case du damier.
+    $g.HauteurFenetre = $g.HauteurFerme + $cote
+    $g.PlateauX       = $lFen - $cote
+    $g.PlateauY       = $g.HauteurFerme
+    $g.Cadre = New-Object System.Drawing.Rectangle $g.PlateauX, $g.PlateauY, $cote, $cote
+    # Poignée dans le coin bas-GAUCHE du damier : le plateau ne peut grandir
+    # que vers la gauche et vers le bas, puisque la barre est ancrée au bord
+    # droit de l'écran.
     $g.Poignee = New-Object System.Drawing.Rectangle `
         $g.Cadre.X, ($g.Cadre.Bottom - $script:POIGNEE), $script:POIGNEE, $script:POIGNEE
     return $g
@@ -97,7 +95,7 @@ function Get-GeometrieEchecs {
 function Draw-FlecheEchecs {
     # Un chevron, pas un pictogramme en pixels : vers le bas quand le plateau
     # est replié, vers le haut quand il est ouvert.
-    param($G, $Rect, [bool]$Ouvert, [string]$Etat, [bool]$Pastille)
+    param($G, $Rect, [bool]$Ouvert, [string]$Etat, [bool]$Pastille, [bool]$Souci = $false)
 
     $ancien = $G.SmoothingMode
     $G.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
@@ -128,7 +126,11 @@ function Draw-FlecheEchecs {
     $lg = $Rect.Width * 0.26
     $ht = $Rect.Height * 0.17
 
-    $stylo = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, 232, 232, 238)), 1.8
+    # Chevron eteint quand le serveur ne repond pas : le probleme se signale
+    # ainsi, sans une seule boite de dialogue.
+    $encre = $(if ($Souci) { [System.Drawing.Color]::FromArgb(255, 122, 122, 130) }
+               else        { [System.Drawing.Color]::FromArgb(255, 232, 232, 238) })
+    $stylo = New-Object System.Drawing.Pen $encre, 1.8
     $stylo.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $stylo.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
     $stylo.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
@@ -177,7 +179,8 @@ function Get-CouleurCadre {
     # distingue mal le rouge du vert.
     param($Partie)
 
-    $neutre = @{ Cadre = [System.Drawing.Color]::FromArgb(255, 24, 23, 21); Lisere = $null }
+    # Rien a signaler = AUCUN liseré : on ne voit que le plateau.
+    $neutre = @{ Cadre = $null; Lisere = $null }
     if (-not $Partie) { return $neutre }
 
     if (Test-PartieTerminee $Partie) {
@@ -195,10 +198,10 @@ function Get-CouleurCadre {
     }
 
     if ($Partie.Etat -eq 'echec') {
-        return @{ Cadre = [System.Drawing.Color]::FromArgb(255, 190, 122, 30); Lisere = $null }
+        return @{ Cadre = [System.Drawing.Color]::FromArgb(255, 214, 128, 42); Lisere = $null }
     }
     if (Test-MonTour $Partie) {
-        return @{ Cadre = [System.Drawing.Color]::FromArgb(255, 138, 112, 34); Lisere = $null }
+        return @{ Cadre = [System.Drawing.Color]::FromArgb(255, 226, 190, 74); Lisere = $null }
     }
     return $neutre
 }
@@ -207,20 +210,6 @@ function Draw-PlateauBarre {
     param($G, $Geo, $Partie)
 
     if (-not $Geo.Ouvert -or -not $Partie) { return }
-
-    # Cadre opaque : il porte la poignée, sépare le damier du bureau, et sa
-    # COULEUR dit où en est la partie (voir Get-CouleurCadre).
-    $etat = Get-CouleurCadre $Partie
-    $fond = New-Object System.Drawing.SolidBrush $etat.Cadre
-    $G.FillRectangle($fond, $Geo.Cadre)
-    $fond.Dispose()
-
-    if ($etat.Lisere) {
-        $p = New-Object System.Drawing.Pen $etat.Lisere, 2.0
-        $r = $Geo.Cadre
-        $G.DrawRectangle($p, ($r.X + 1), ($r.Y + 1), ($r.Width - 3), ($r.Height - 3))
-        $p.Dispose()
-    }
 
     Draw-Echiquier $G $Geo.PlateauX $Geo.PlateauY $Geo.Case $Partie.Pos @{
         Retourne       = $script:plateauRetourne
@@ -234,13 +223,33 @@ function Draw-PlateauBarre {
 
     if ($script:plateauPromo) { Draw-PromoBarre $G $Geo $Partie }
 
-    # Poignée : trois traits en biais, le langage universel du coin qu'on tire.
-    # Orientés vers le bas-gauche, dans le sens où le plateau peut grandir.
     $ancien = $G.SmoothingMode
     $G.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $p = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(170, 210, 210, 220)), 1.4
+
+    # L'état de la partie, peint EN LISERÉ sur le bord du damier. Rien autour :
+    # on ne voit que le plateau tant qu'il n'y a rien à signaler.
+    $etat = Get-CouleurCadre $Partie
+    if ($etat.Cadre) {
+        $ep = [single][math]::Max(2.0, $Geo.Case * 0.10)
+        $p = New-Object System.Drawing.Pen $etat.Cadre, $ep
+        $d = [int]($ep / 2)
+        $G.DrawRectangle($p, ($Geo.Cadre.X + $d), ($Geo.Cadre.Y + $d),
+                             ($Geo.Cadre.Width - 2 * $d - 1), ($Geo.Cadre.Height - 2 * $d - 1))
+        $p.Dispose()
+        if ($etat.Lisere) {
+            $p2 = New-Object System.Drawing.Pen $etat.Lisere, 1.6
+            $e2 = [int]($ep + 1)
+            $G.DrawRectangle($p2, ($Geo.Cadre.X + $e2), ($Geo.Cadre.Y + $e2),
+                                  ($Geo.Cadre.Width - 2 * $e2 - 1), ($Geo.Cadre.Height - 2 * $e2 - 1))
+            $p2.Dispose()
+        }
+    }
+
+    # Poignée : trois traits en biais, le langage universel du coin qu'on tire.
+    # Orientés vers le bas-gauche, dans le sens où le plateau peut grandir.
+    $p = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(130, 40, 40, 44)), 1.6
     for ($i = 0; $i -lt 3; $i++) {
-        $d = 4 + $i * 4
+        $d = 3 + $i * 4
         $G.DrawLine($p, ($Geo.Poignee.X + $d), ($Geo.Poignee.Bottom - 2),
                         ($Geo.Poignee.X + 1), ($Geo.Poignee.Bottom - 1 - $d))
     }

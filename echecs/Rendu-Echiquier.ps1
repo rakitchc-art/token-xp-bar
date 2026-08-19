@@ -56,138 +56,143 @@ $script:Palette = @{
 $script:Silhouettes = @{
 
     'P' = @'
-        M 50 13
-        C 59.4 13 67 20.6 67 30
-        C 67 34.6 65.2 38.7 62.2 41.8
-        C 68.5 46.5 72 54 72 62
-        L 66 62
-        L 74 84
-        L 26 84
-        L 34 62
-        L 28 62
-        C 28 54 31.5 46.5 37.8 41.8
-        C 34.8 38.7 33 34.6 33 30
-        C 33 20.6 40.6 13 50 13
+        M 50 11
+        C 60.5 11 69 19.5 69 30
+        C 69 35.2 66.6 40 62.7 43.1
+        C 70 48.4 74.5 57 74.5 66
+        L 65 66
+        L 77 87
+        L 23 87
+        L 35 66
+        L 25.5 66
+        C 25.5 57 30 48.4 37.3 43.1
+        C 33.4 40 31 35.2 31 30
+        C 31 19.5 39.5 11 50 11
         Z
 '@
 
     'R' = @'
-        M 22 17
-        L 34 17
-        L 34 26
-        L 44 26
-        L 44 17
-        L 56 17
-        L 56 26
-        L 66 26
-        L 66 17
-        L 78 17
-        L 78 38
-        L 70 46
-        L 70 66
-        L 78 75
-        L 78 86
-        L 22 86
-        L 22 75
-        L 30 66
-        L 30 46
-        L 22 38
+        M 19 15
+        L 32.5 15
+        L 32.5 26
+        L 43.5 26
+        L 43.5 15
+        L 56.5 15
+        L 56.5 26
+        L 67.5 26
+        L 67.5 15
+        L 81 15
+        L 81 40
+        L 71.5 48
+        L 71.5 64
+        L 81 74
+        L 81 88
+        L 19 88
+        L 19 74
+        L 28.5 64
+        L 28.5 48
+        L 19 40
         Z
 '@
 
     'B' = @'
-        M 50 11
-        C 54.4 11 58 14.6 58 19
-        C 58 21.6 56.7 23.9 54.8 25.4
-        C 62.5 31 71 41.5 71 53
-        C 71 61 65.5 67 57.5 69
-        L 42.5 69
-        C 34.5 67 29 61 29 53
-        C 29 41.5 37.5 31 45.2 25.4
-        C 43.3 23.9 42 21.6 42 19
-        C 42 14.6 45.6 11 50 11
+        M 50 9
+        C 54.8 9 58.8 13 58.8 17.8
+        C 58.8 20.6 57.4 23.1 55.2 24.7
+        C 63.6 30.8 73 42.1 73 54.2
+        C 73 62.4 66.9 68.8 58.4 70.8
+        L 41.6 70.8
+        C 33.1 68.8 27 62.4 27 54.2
+        C 27 42.1 36.4 30.8 44.8 24.7
+        C 42.6 23.1 41.2 20.6 41.2 17.8
+        C 41.2 13 45.2 9 50 9
         Z
-        M 45 32
-        L 60 47
-        L 56 51
-        L 41 36
+        M 44 30.5
+        L 60.5 47
+        L 56 51.5
+        L 39.5 35
         Z
-        M 25 73
-        L 75 73
-        L 80 87
-        L 20 87
+        M 22 75
+        L 78 75
+        L 84 88
+        L 16 88
         Z
 '@
 
+    # Le cavalier est la seule pièce qu'on reconnaît à sa SILHOUETTE et non à
+    # sa géométrie : il lui faut une oreille pointue, un chanfrein creusé, un
+    # museau carré et une encolure épaisse. Sans ces quatre traits il devient
+    # une tache ronde qui ne dit plus « cheval ».
     'N' = @'
-        M 27 87
-        L 81 87
-        C 81 70 79 55 74.5 45
-        C 70 34.5 62.5 27 56 22
-        L 60.5 11
-        L 49 17
-        C 43 14.5 37 15.5 32 20.5
-        C 27 25.5 22.5 32.5 19 40.5
-        C 16.5 46.5 16 51.5 18 55
-        C 20.2 58.8 25.5 58.5 28.5 55
-        L 34.5 47.5
-        L 42 51.5
-        C 37.5 60 34 70 32.5 78
-        C 31.8 82 31 85 30 87
+        M 23 88
+        L 84 88
+        C 84 68 81 51.5 75 40.5
+        C 70.5 32 64 25.5 58 21
+        L 59.5 12
+        L 66 4
+        L 51.5 13.5
+        C 45 9.5 38 10.5 32 16
+        C 25 22 19 31.5 14.8 41.5
+        C 12.6 46.5 12.2 51.3 14.8 54.6
+        C 17.6 58.2 23.4 58.2 26.4 54.4
+        L 30.5 47.5
+        L 39.5 51
+        C 34.5 60 30.8 70.5 29.3 78.5
+        C 28.6 82.5 27.6 86 26 88
         Z
-        E 38 32 3.4 3.4
+        E 36.5 29.5 3.9 3.9
 '@
 
     'Q' = @'
-        E 50 25 7 7
-        E 22 30 6.5 6.5
-        E 78 30 6.5 6.5
-        E 34 33 6 6
-        E 66 33 6 6
-        M 22 38
-        L 30 60
-        L 36 39
-        L 45 63
-        L 50 34
-        L 55 63
-        L 64 39
-        L 70 60
-        L 78 38
-        L 74 70
-        L 26 70
+        E 50 22 8 8
+        E 18 29 7.2 7.2
+        E 82 29 7.2 7.2
+        E 32.5 31 6.8 6.8
+        E 67.5 31 6.8 6.8
+        M 18 37
+        L 28 62
+        L 34 40
+        L 44.5 66
+        L 50 32
+        L 55.5 66
+        L 66 40
+        L 72 62
+        L 82 37
+        L 76.5 72
+        L 23.5 72
         Z
-        M 24 74
-        L 76 74
-        L 81 87
-        L 19 87
+        M 21 76
+        L 79 76
+        L 85 89
+        L 15 89
         Z
 '@
 
     'K' = @'
-        M 44 4
-        L 56 4
-        L 56 14
-        L 67 14
-        L 67 26
-        L 56 26
-        L 56 36
-        L 44 36
-        L 44 26
-        L 33 26
-        L 33 14
-        L 44 14
+        M 43.5 3
+        L 56.5 3
+        L 56.5 14
+        L 68 14
+        L 68 26.5
+        L 56.5 26.5
+        L 56.5 38
+        L 43.5 38
+        L 43.5 26.5
+        L 32 26.5
+        L 32 14
+        L 43.5 14
         Z
-        M 50 37
-        C 63 37 73 45.5 73 57
-        C 73 64.5 67.5 70 59 71.5
-        L 41 71.5
-        C 32.5 70 27 64.5 27 57
-        C 27 45.5 37 37 50 37
+        M 50 40
+        C 64.5 40 76 49.5 76 60.5
+        C 76 67.5 70 72.8 60.5 74.5
+        L 39.5 74.5
+        C 30 72.8 24 67.5 24 60.5
+        C 24 49.5 35.5 40 50 40
         Z
-        M 24 75
-        L 76 75
-        L 81 88
-        L 19 88
+        M 21 78
+        L 79 78
+        L 85 90
+        L 15 90
         Z
 '@
 }
@@ -340,15 +345,18 @@ function Draw-Echiquier {
             $b.Dispose()
         }
 
-        # Roi en échec : halo rouge dégradé, visible sans lire les pièces.
+        # Roi en échec : la case est teintée à plat et cernée d'un trait plus
+        # soutenu. Un halo dégradé faisait une tache floue peu nette ; ici le
+        # rouge reste franc et la pièce dessus reste lisible.
         if ($case -eq $caseEchec) {
-            $chemin = New-Object System.Drawing.Drawing2D.GraphicsPath
-            $chemin.AddEllipse($x, $y, $TailleCase, $TailleCase)
-            $degrade = New-Object System.Drawing.Drawing2D.PathGradientBrush $chemin
-            $degrade.CenterColor = [System.Drawing.Color]::FromArgb(215, $script:Palette.Echec)
-            $degrade.SurroundColors = @([System.Drawing.Color]::FromArgb(0, $script:Palette.Echec))
-            $G.FillRectangle($degrade, $x, $y, $TailleCase, $TailleCase)
-            $degrade.Dispose(); $chemin.Dispose()
+            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(120, $script:Palette.Echec))
+            $G.FillRectangle($b, $x, $y, $TailleCase, $TailleCase)
+            $b.Dispose()
+            $ep = [single][math]::Max(2.0, $TailleCase * 0.075)
+            $p = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(225, $script:Palette.Echec)), $ep
+            $d = $ep / 2.0
+            $G.DrawRectangle($p, ($x + $d), ($y + $d), ($TailleCase - $ep), ($TailleCase - $ep))
+            $p.Dispose()
         }
 
         # Coordonnées dans le coin, comme sur un vrai échiquier : lettre en
@@ -388,14 +396,16 @@ function Draw-Echiquier {
         $x = $OX + $cx * $TailleCase
         $y = $OY + $cy * $TailleCase
 
+        # Opacite volontairement soutenue : a 60/255 sur un petit plateau, les
+        # pastilles etaient si pales qu'on croyait certaines absentes.
         if ($Pos.B[$ti] -eq ' ') {
-            $r = $TailleCase * 0.16
-            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(60, $script:Palette.Possible))
+            $r = $TailleCase * 0.175
+            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(105, $script:Palette.Possible))
             $G.FillEllipse($b, ($x + $TailleCase / 2 - $r), ($y + $TailleCase / 2 - $r), (2 * $r), (2 * $r))
             $b.Dispose()
         } else {
-            $ep = $TailleCase * 0.09
-            $p = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(70, $script:Palette.Possible)), $ep
+            $ep = $TailleCase * 0.10
+            $p = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(120, $script:Palette.Possible)), $ep
             $G.DrawEllipse($p, ($x + $ep / 2), ($y + $ep / 2), ($TailleCase - $ep), ($TailleCase - $ep))
             $p.Dispose()
         }

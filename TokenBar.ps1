@@ -256,7 +256,8 @@ $panel.Add_Paint({
     # La fleche et le plateau, eux, sont deja en coordonnees de FENETRE.
     $g.ResetTransform()
     if ($geo.Fleche) {
-        Draw-FlecheEchecs $g $geo.Fleche $script:echecsOuvert $script:flecheEtat $script:echecsMonTour
+        Draw-FlecheEchecs $g $geo.Fleche $script:echecsOuvert $script:flecheEtat `
+                          $script:echecsMonTour ([bool]$script:echecsErreur)
         Draw-PlateauBarre $g $geo $script:echecsPartie
     }
 })
