@@ -79,4 +79,11 @@ uniquement quand VS Code est ta fenetre active.
   https://github.com/rakitchc-art/token-xp-bar/releases/latest/download/Desinstaller.bat
 
 
+────────────────────────────────────────────────────────────
+
+  Ce fichier ne dit pas tout. La barre sait faire autre chose
+  que compter des tokens -- mais elle ne le dira a personne
+  tant qu'on ne le lui aura pas demande comme il faut.
+
+
   Fait avec ❤ par un pote — bon code !

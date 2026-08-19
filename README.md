@@ -89,6 +89,10 @@ Tout ce qui suit, c'est le code source pour les curieux (ou pour bidouiller) :
 | `Installer.bat` / `Desinstaller.bat` | Installation/désinstallation depuis une copie locale du dépôt. |
 | `Build-Installer.ps1` | Génère `TokenBar-Installer.bat` (empaquette les fichiers ci-dessus en un seul, à relancer après toute modification). |
 
+> 🕯️ Ce tableau est incomplet, et ce n'est pas un oubli. TokenBar sait faire
+> autre chose que compter des tokens — mais il ne le dira à personne tant
+> qu'on ne le lui aura pas demandé comme il faut.
+
 ---
 
 ## 📄 Licence
