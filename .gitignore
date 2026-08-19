@@ -12,3 +12,7 @@ calib-state.json
 Thumbs.db
 Desktop.ini
 *.lnk
+
+# Images et journaux produits par les scripts de mise au point.
+scripts/*.png
+scripts/*.log
